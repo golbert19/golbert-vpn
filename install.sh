@@ -1,135 +1,55 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "=== GOLBERT VPN INSTALLER FIX ==="
+# Colores para la instalación
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
-# Verificar permisos de root
 if [ "$EUID" -ne 0 ]; then
-    echo "Error: Este script debe ejecutarse como root."
+    echo -e "${RED}Error: Ejecuta este script como usuario root.${NC}"
     exit 1
 fi
 
+echo -e "${YELLOW}=====================================================${NC}"
+echo -e "${YELLOW}         INSTALADOR AUTOMÁTICO GOLBERT VPN          ${NC}"
+echo -e "${YELLOW}=====================================================${NC}"
+
+# 1. Actualizar repositorios e instalar paquetes base
+echo -e "${GREEN}[1/7] Actualizando paquetes del sistema...${NC}"
 export DEBIAN_FRONTEND=noninteractive
+apt-get update -y && apt-get upgrade -y
+apt-get install -y curl wget net-tools ufw dropbear stunnel4 python3 cmake gcc gasp build-essential nano cron
 
-# 1. Actualizar el sistema e instalar dependencias
-apt-get update && apt-get upgrade -y
-apt-get install -y openvpn easy-rsa dropbear stunnel4 build-essential cmake git ufw curl wget openssl python3
+# 2. Configurar Banner /etc/issue.net
+echo -e "${GREEN}[2/7] Configurando Banner por defecto...${NC}"
+cat > /etc/issue.net <<'BANNER_EOF'
+<p style="text-align:center;">
+<font color="green"><b>=================================</b></font><br>
+<font color="blue"><b>       BIENVENIDO A GOLBERT VPN   </b></font><br>
+<font color="red"><b>  PROHIBIDO SPAM / TORRENT / DDOS </b></font><br>
+<font color="green"><b>=================================</b></font>
+</p>
+BANNER_EOF
 
-# 2. Instalar V2Ray
-echo "=== Instalando V2Ray ==="
-curl -sS -L https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh | bash || true
-systemctl enable v2ray --now || true
+# Configurar Dropbear y OpenSSH para usar el banner
+sed -i 's|^DROPBEAR_BANNER=.*|DROPBEAR_BANNER="/etc/issue.net"|' /etc/default/dropbear 2>/dev/null || echo 'DROPBEAR_BANNER="/etc/issue.net"' >> /etc/default/dropbear
+sed -i 's|^#Banner none|Banner /etc/issue.net|' /etc/ssh/sshd_config 2>/dev/null || true
+sed -i 's|^Banner none|Banner /etc/issue.net|' /etc/ssh/sshd_config 2>/dev/null || true
 
-# 3. Configurar Dropbear (Puerto 109)
-echo "=== Configurando Dropbear ==="
-sed -i 's/^NO_START=1/NO_START=0/' /etc/default/dropbear 2>/dev/null || true
+# 3. Configurar Dropbear
+echo -e "${GREEN}[3/7] Configurando Dropbear (Puerto 109)...${NC}"
+sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear
+sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear
 
-if grep -q "^DROPBEAR_PORT=" /etc/default/dropbear; then
-    sed -i 's/^DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear
-else
-    echo 'DROPBEAR_PORT=109' >> /etc/default/dropbear
-fi
+# 4. Configurar Stunnel4
+echo -e "${GREEN}[4/7] Configurando Stunnel4 (Puerto 443)...${NC}"
+openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 -sha256 \
+    -subj "/C=US/ST=State/L=City/O=GolbertVPN/CN=golbert.vpn" \
+    -keyout /etc/stunnel/stunnel.pem -out /etc/stunnel/stunnel.pem >/dev/null 2>&1
 
-systemctl enable dropbear
-systemctl restart dropbear
-
-# 4. Compilar e instalar BadVPN (UDPGW - Puerto 7300)
-echo "=== Compilando BadVPN ==="
-BUILD_DIR=$(mktemp -d)
-git clone --depth 1 https://github.com/ambrop72/badvpn.git "$BUILD_DIR/badvpn"
-mkdir -p "$BUILD_DIR/badvpn/build"
-cd "$BUILD_DIR/badvpn/build"
-cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1
-make -j"$(nproc)"
-make install
-cd /
-rm -rf "$BUILD_DIR"
-
-# Crear servicio BadVPN
-cat > /etc/systemd/system/badvpn.service <<'BADVPN_EOF'
-[Unit]
-Description=BadVPN UDPGW Golbert Service
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 0.0.0.0:7300 --max-clients 1000
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-BADVPN_EOF
-
-systemctl daemon-reload
-systemctl enable badvpn --now
-
-# 5. Configurar Python WS/HTTP Proxy (Puertos 80 y 8080)
-echo "=== Configurando Proxy WS/HTTP (Puertos 80, 8080) ==="
-cat > /usr/local/bin/ws-proxy.py <<'PROXY_EOF'
-import socket, threading, select
-
-LISTENING_PORTS = [80, 8080]
-TARGET_HOST = '127.0.0.1'
-TARGET_PORT = 109 # Redirige a Dropbear
-
-def handle_client(client_socket):
-    try:
-        target_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        target_socket.connect((TARGET_HOST, TARGET_PORT))
-        
-        sockets = [client_socket, target_socket]
-        while True:
-            readable, _, _ = select.select(sockets, [], [], 60)
-            if not readable:
-                break
-            for s in readable:
-                other = target_socket if s is client_socket else client_socket
-                data = s.recv(8192)
-                if not data:
-                    return
-                other.sendall(data)
-    except Exception:
-        pass
-    finally:
-        client_socket.close()
-
-def start_server(port):
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(('0.0.0.0', port))
-    server.listen(100)
-    while True:
-        client, _ = server.accept()
-        threading.Thread(target=handle_client, args=(client,), daemon=True).start()
-
-for port in LISTENING_PORTS:
-    threading.Thread(target=start_server, args=(port,), daemon=True).start()
-
-threading.Event().wait()
-PROXY_EOF
-
-cat > /etc/systemd/system/ws-proxy.service <<'WSPROXY_EOF'
-[Unit]
-Description=Golbert WS/HTTP Proxy Service
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/python3 /usr/local/bin/ws-proxy.py
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-WSPROXY_EOF
-
-systemctl daemon-reload
-systemctl enable ws-proxy --now
-
-# 6. Configurar Stunnel4 (Puerto 443 -> SSL/TLS a Dropbear 109)
-echo "=== Configurando Stunnel4 ==="
-mkdir -p /etc/stunnel
 cat > /etc/stunnel/stunnel.conf <<'STUNNEL_EOF'
-pid = /var/run/stunnel4/stunnel.pid
 cert = /etc/stunnel/stunnel.pem
 client = no
 socket = l:TCP_NODELAY=1
@@ -140,53 +60,187 @@ accept = 443
 connect = 127.0.0.1:109
 STUNNEL_EOF
 
-if [ -f /etc/default/stunnel4 ]; then
-    sed -i 's/^ENABLED=0/ENABLED=1/' /etc/default/stunnel4
+sed -i 's/ENABLED=0/ENABLED=1/' /etc/default/stunnel4 2>/dev/null || true
+
+# 5. Instalar BadVPN (UDPGW) en Puerto 7300
+echo -e "${GREEN}[5/7] Compilando e Instalando BadVPN UDPGW...${NC}"
+wget -q -O /tmp/badvpn.tar.gz https://github.com/ambrop72/badvpn/archive/refs/tags/1.999.130.tar.gz || true
+if [ -f /tmp/badvpn.tar.gz ]; then
+    cd /tmp && tar -xf badvpn.tar.gz && cd badvpn-1.999.130
+    mkdir build && cd build
+    cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1 >/dev/null
+    make install >/dev/null
+    cd / && rm -rf /tmp/badvpn*
 fi
 
-if [ ! -f /etc/stunnel/stunnel.pem ]; then
-    openssl req -new -x509 -days 365 -nodes \
-        -out /etc/stunnel/stunnel.pem \
-        -keyout /etc/stunnel/stunnel.pem \
-        -subj "/CN=golbert19"
-    chmod 600 /etc/stunnel/stunnel.pem
-fi
+cat > /etc/systemd/system/badvpn.service <<'BADVPN_EOF'
+[Unit]
+Description=BadVPN UDPGW Service
+After=network.target
 
-systemctl enable stunnel4 --now || systemctl restart stunnel4
+[Service]
+ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 0.0.0.0:7300 --max-clients 1000 --max-connections-for-client 10
+Restart=always
 
-# 7. Configurar UFW (Habilitar todos tus puertos requeridos)
-echo "=== Configurando Firewall (UFW) ==="
-ufw allow 22/tcp    # SSH
-ufw allow 80/tcp    # WS E-PROXY
-ufw allow 443/tcp   # TUNNEL SSL WS
-ufw allow 109/tcp   # DROPBEAR
-ufw allow 8080/tcp  # BHTTP / Proxy
-ufw allow 8180/udp  # HCR UDP
-ufw allow 7300/udp  # BADVPN UDPGW
-ufw --force enable
+[Install]
+WantedBy=multi-user.target
+BADVPN_EOF
 
-# 8. Descargar e instalar el menú interactivo
-echo "=== Instalando Panel de Control (Menú) ==="
-curl -sSL https://raw.githubusercontent.com/golbert19/golbert-vpn/main/menu.sh -o /usr/local/bin/menu || true
-chmod +x /usr/local/bin/menu || true
+# 6. Crear HTTP/WS Proxy Script (Puerto 80, 8080)
+echo -e "${GREEN}[6/7] Creando Servicio HTTP/WS Proxy...${NC}"
+cat > /usr/local/bin/ws-proxy.py <<'PROXY_EOF'
+import socket, threading, select
 
-# 9. Verificación final de estado
-echo "=== PUERTOS CONFIGURADOS ==="
-echo " [22/TCP]   SSH"
-echo " [80/TCP]   WS E-PROXY"
-echo " [443/TCP]  TUNNEL SSL WS"
-echo " [109/TCP]  DROPBEAR"
-echo " [8080/TCP] BHTTP"
-echo " [8180/UDP] HCR"
-echo " [7300/UDP] BADVPN"
-echo "============================="
+LISTENING_PORTS = [80, 8080]
+BUFLEN = 4096
+BACKLOG = 100
 
-systemctl is-active --quiet badvpn && echo "[OK] BadVPN: Activo" || echo "[FAIL] BadVPN: Falló"
-systemctl is-active --quiet ws-proxy && echo "[OK] WS-Proxy (80/8080): Activo" || echo "[FAIL] WS-Proxy: Falló"
-systemctl is-active --quiet stunnel4 && echo "[OK] Stunnel4 (443): Activo" || echo "[FAIL] Stunnel4: Falló"
-systemctl is-active --quiet dropbear && echo "[OK] Dropbear (109): Activo" || echo "[FAIL] Dropbear: Falló"
+class Proxy(threading.Thread):
+    def __init__(self, client, address):
+        super().__init__()
+        self.client = client
+        self.address = address
 
-echo "=========================================="
-echo "      GOLBERT VPN INSTALADO CON ÉXITO    "
-echo "  Escribe 'menu' para abrir el panel     "
-echo "=========================================="
+    def run(self):
+        try:
+            data = self.client.recv(BUFLEN)
+            if data:
+                target = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                target.connect(('127.0.0.1', 109))
+                self.client.sendall(b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n')
+                self.forward(self.client, target)
+        except Exception:
+            pass
+        finally:
+            self.client.close()
+
+    def forward(self, source, destination):
+        sockets = [source, destination]
+        while True:
+            read_sockets, _, _ = select.select(sockets, [], [])
+            for sock in read_sockets:
+                data = sock.recv(BUFLEN)
+                if not data:
+                    return
+                if sock is source:
+                    destination.sendall(data)
+                else:
+                    source.sendall(data)
+
+def start_server(port):
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(('0.0.0.0', port))
+    server.listen(BACKLOG)
+    while True:
+        client, addr = server.accept()
+        threading.Thread(target=Proxy(client, addr).run).start()
+
+if __name__ == '__main__':
+    for port in LISTENING_PORTS:
+        threading.Thread(target=start_server, args=(port,)).start()
+PROXY_EOF
+
+cat > /etc/systemd/system/ws-proxy.service <<'WSPROXY_EOF'
+[Unit]
+Description=WebSocket / HTTP Proxy Service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/bin/ws-proxy.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+WSPROXY_EOF
+
+# 7. Configurar Anti Multi-Login y Limpiador Automático
+echo -e "${GREEN}[7/7] Configurando Limitador y Limpieza Automática...${NC}"
+cat > /usr/local/bin/limiter.sh <<'LIMITER_EOF'
+#!/bin/bash
+LIMIT_FILE="/etc/golbert_limits.conf"
+[ ! -f "$LIMIT_FILE" ] && touch "$LIMIT_FILE"
+DEFAULT_LIMIT=1
+
+while true; do
+    USERS=$(ps aux | grep -E 'dropbear|sshd' | grep -v grep | grep -v root | awk '{print $1}' | sort | uniq)
+    for user in $USERS; do
+        USER_LIMIT=$(grep -w "^$user" "$LIMIT_FILE" | cut -d'=' -f2 || true)
+        USER_LIMIT=${USER_LIMIT:-$DEFAULT_LIMIT}
+
+        PIDS=$(ps aux | grep -E 'dropbear|sshd' | grep -v grep | grep -w "^$user" | awk '{print $2}')
+        CONN_COUNT=$(echo "$PIDS" | wc -l)
+
+        if [ "$CONN_COUNT" -gt "$USER_LIMIT" ]; then
+            EXCESS=$((CONN_COUNT - USER_LIMIT))
+            PIDS_TO_KILL=$(ps aux | grep -E 'dropbear|sshd' | grep -v grep | grep -w "^$user" | awk '{print $2}' | tail -n "$EXCESS")
+            for pid in $PIDS_TO_KILL; do
+                kill -9 "$pid" 2>/dev/null || true
+            done
+        fi
+    done
+    sleep 3
+done
+LIMITER_EOF
+chmod +x /usr/local/bin/limiter.sh
+
+cat > /etc/systemd/system/golbert-limiter.service <<'SERVICE_EOF'
+[Unit]
+Description=Golbert Anti Multi-Login Limiter Service
+After=network.target
+
+[Service]
+ExecStart=/bin/bash /usr/local/bin/limiter.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+SERVICE_EOF
+
+cat > /usr/local/bin/expcleaner.sh <<'EXPCLEAN_EOF'
+#!/bin/bash
+hoy=$(date +%Y-%m-%d)
+hoy_sec=$(date -d "$hoy" +%s)
+
+while FS=':' read -r user _ uid _ _ _ _; do
+    if [ "$uid" -ge 1000 ] && [ "$user" != "nobody" ]; then
+        exp_date=$(chage -l "$user" | grep "Account expires" | cut -d: -f2 | xargs)
+        if [ "$exp_date" != "never" ] && [ -n "$exp_date" ]; then
+            exp_sec=$(date -d "$exp_date" +%s 2>/dev/null || echo 0)
+            if [ "$exp_sec" -gt 0 ] && [ "$exp_sec" -lt "$hoy_sec" ]; then
+                pkill -u "$user" 2>/dev/null || true
+                userdel -f "$user" 2>/dev/null || true
+                sed -i "/^$user=/d" /etc/golbert_limits.conf 2>/dev/null || true
+            fi
+        fi
+    fi
+done < /etc/passwd
+
+journalctl --vacuum-size=50M >/dev/null 2>&1 || true
+truncate -s 0 /var/log/syslog 2>/dev/null || true
+truncate -s 0 /var/log/auth.log 2>/dev/null || true
+EXPCLEAN_EOF
+chmod +x /usr/local/bin/expcleaner.sh
+
+(crontab -l 2>/dev/null | grep -v "/usr/local/bin/expcleaner.sh" ; echo "0 */6 * * * /bin/bash /usr/local/bin/expcleaner.sh") | crontab -
+
+# Iniciar todos los servicios y configurar Firewall
+systemctl daemon-reload
+systemctl enable --now dropbear stunnel4 badvpn ws-proxy golbert-limiter
+
+ufw allow 22/tcp
+ufw allow 109/tcp
+ufw allow 443/tcp
+ufw allow 80/tcp
+ufw allow 8080/tcp
+ufw allow 7300/udp
+echo "y" | ufw enable >/dev/null 2>&1 || true
+
+# Configurar alias 'menu' para ingresar rápido
+echo "alias menu='bash /usr/local/bin/menu.sh'" >> ~/.bashrc
+
+echo -e "${GREEN}=====================================================${NC}"
+echo -e "${GREEN}     ¡INSTALACIÓN COMPLETADA EXITOSAMENTE!           ${NC}"
+echo -e "${GREEN}=====================================================${NC}"
+echo -e "Escribe ${YELLOW}menu${NC} o ejecuta ${YELLOW}bash /usr/local/bin/menu.sh${NC} para abrir el panel."
