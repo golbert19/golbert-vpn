@@ -17,7 +17,7 @@ rm -rf /tmp/badvpn
 git clone https://github.com/ambrop72/badvpn.git /tmp/badvpn
 mkdir -p /tmp/badvpn/build
 cd /tmp/badvpn/build
-cmake.. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1
+cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1
 make -j$(nproc)
 make install
 
