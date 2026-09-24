@@ -225,6 +225,16 @@ chmod +x /usr/local/bin/expcleaner.sh
 
 (crontab -l 2>/dev/null | grep -v "/usr/local/bin/expcleaner.sh" ; echo "0 */6 * * * /bin/bash /usr/local/bin/expcleaner.sh") | crontab -
 
+# Descargar el menú interactivo desde el repositorio
+echo -e "${GREEN}Descargando Panel del Menú...${NC}"
+wget -q -O /usr/local/bin/menu.sh https://raw.githubusercontent.com/golbert19/golbert-vpn/main/menu.sh
+chmod +x /usr/local/bin/menu.sh
+
+# Configurar alias 'menu' para ingresar directo desde la terminal
+if ! grep -q "alias menu=" ~/.bashrc; then
+    echo "alias menu='bash /usr/local/bin/menu.sh'" >> ~/.bashrc
+fi
+
 # Iniciar todos los servicios y configurar Firewall
 systemctl daemon-reload
 systemctl enable --now dropbear stunnel4 badvpn ws-proxy golbert-limiter
@@ -236,9 +246,6 @@ ufw allow 80/tcp
 ufw allow 8080/tcp
 ufw allow 7300/udp
 echo "y" | ufw enable >/dev/null 2>&1 || true
-
-# Configurar alias 'menu' para ingresar rápido
-echo "alias menu='bash /usr/local/bin/menu.sh'" >> ~/.bashrc
 
 echo -e "${GREEN}=====================================================${NC}"
 echo -e "${GREEN}     ¡INSTALACIÓN COMPLETADA EXITOSAMENTE!           ${NC}"
