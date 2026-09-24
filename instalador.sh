@@ -43,51 +43,8 @@ echo -e "${GREEN}[3/7] Configurando Dropbear (Puerto 109)...${NC}"
 sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear
 sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear
 
-# 4. Configurar Stunnel4
-echo -e "${GREEN}[4/7] Configurando Stunnel4 (Puerto 443)...${NC}"
-openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 -sha256 \
-    -subj "/C=US/ST=State/L=City/O=GolbertVPN/CN=golbert.vpn" \
-    -keyout /etc/stunnel/stunnel.pem -out /etc/stunnel/stunnel.pem >/dev/null 2>&1
-
-cat > /etc/stunnel/stunnel.conf <<'STUNNEL_EOF'
-cert = /etc/stunnel/stunnel.pem
-client = no
-socket = l:TCP_NODELAY=1
-socket = r:TCP_NODELAY=1
-
-[dropbear]
-accept = 443
-connect = 127.0.0.1:109
-STUNNEL_EOF
-
-sed -i 's/ENABLED=0/ENABLED=1/' /etc/default/stunnel4 2>/dev/null || true
-
-# 5. Instalar BadVPN (UDPGW) en Puerto 7300
-echo -e "${GREEN}[5/7] Compilando e Instalando BadVPN UDPGW...${NC}"
-wget -q -O /tmp/badvpn.tar.gz https://github.com/ambrop72/badvpn/archive/refs/tags/1.999.130.tar.gz || true
-if [ -f /tmp/badvpn.tar.gz ]; then
-    cd /tmp && tar -xf badvpn.tar.gz && cd badvpn-1.999.130
-    mkdir build && cd build
-    cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1 >/dev/null
-    make install >/dev/null
-    cd / && rm -rf /tmp/badvpn*
-fi
-
-cat > /etc/systemd/system/badvpn.service <<'BADVPN_EOF'
-[Unit]
-Description=BadVPN UDPGW Service
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 0.0.0.0:7300 --max-clients 1000 --max-connections-for-client 10
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-BADVPN_EOF
-
-# 6. Crear HTTP/WS Proxy Script (Puerto 80, 8080)
-echo -e "${GREEN}[6/7] Creando Servicio HTTP/WS Proxy...${NC}"
+# 4. Crear HTTP/WS Proxy Script Mejorado (Soporta Payloads Custom, HTTP, SSL+WS)
+echo -e "${GREEN}[4/7] Creando Servicio HTTP/WS Proxy...${NC}"
 cat > /usr/local/bin/ws-proxy.py <<'PROXY_EOF'
 import socket, threading, select
 
@@ -107,6 +64,7 @@ class Proxy(threading.Thread):
             if data:
                 target = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 target.connect(('127.0.0.1', 109))
+                # Responder con 101 Switching Protocols para habilitar el túnel WebSocket / Custom Payload
                 self.client.sendall(b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n')
                 self.forward(self.client, target)
         except Exception:
@@ -153,6 +111,64 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 WSPROXY_EOF
+
+# 5. Configurar Stunnel4 (Puerto 443 -> Redirigido a WS Proxy en el puerto 80)
+echo -e "${GREEN}[5/7] Configurando Stunnel4 (Puerto 443)...${NC}"
+mkdir -p /etc/stunnel
+openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 -sha256 \
+    -subj "/C=US/ST=State/L=City/O=GolbertVPN/CN=golbert.vpn" \
+    -keyout /etc/stunnel/stunnel.pem -out /etc/stunnel/stunnel.pem >/dev/null 2>&1
+
+cat > /etc/stunnel/stunnel.conf <<'STUNNEL_EOF'
+cert = /etc/stunnel/stunnel.pem
+client = no
+socket = l:TCP_NODELAY=1
+socket = r:TCP_NODELAY=1
+
+[ws-ssl]
+accept = 443
+connect = 127.0.0.1:80
+STUNNEL_EOF
+
+sed -i 's/ENABLED=0/ENABLED=1/' /etc/default/stunnel4 2>/dev/null || true
+
+# Crear archivo de servicio systemd dedicado para Stunnel4
+cat > /etc/systemd/system/stunnel4.service <<'STUNNEL_SERVICE_EOF'
+[Unit]
+Description=SSL tunnel for network daemon
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/stunnel4 /etc/stunnel/stunnel.conf
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+STUNNEL_SERVICE_EOF
+
+# 6. Instalar BadVPN (UDPGW) en Puerto 7300
+echo -e "${GREEN}[6/7] Compilando e Instalando BadVPN UDPGW...${NC}"
+wget -q -O /tmp/badvpn.tar.gz https://github.com/ambrop72/badvpn/archive/refs/tags/1.999.130.tar.gz || true
+if [ -f /tmp/badvpn.tar.gz ]; then
+    cd /tmp && tar -xf badvpn.tar.gz && cd badvpn-1.999.130
+    mkdir build && cd build
+    cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1 >/dev/null
+    make install >/dev/null
+    cd / && rm -rf /tmp/badvpn*
+fi
+
+cat > /etc/systemd/system/badvpn.service <<'BADVPN_EOF'
+[Unit]
+Description=BadVPN UDPGW Service
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 0.0.0.0:7300 --max-clients 1000 --max-connections-for-client 10
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+BADVPN_EOF
 
 # 7. Configurar Anti Multi-Login y Limpiador Automático
 echo -e "${GREEN}[7/7] Configurando Limitador y Limpieza Automática...${NC}"
@@ -237,7 +253,8 @@ fi
 
 # Iniciar todos los servicios y configurar Firewall
 systemctl daemon-reload
-systemctl enable --now dropbear stunnel4 badvpn ws-proxy golbert-limiter
+systemctl restart dropbear
+systemctl enable --now ws-proxy stunnel4 badvpn golbert-limiter
 
 ufw allow 22/tcp
 ufw allow 109/tcp
