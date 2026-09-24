@@ -33,70 +33,83 @@ cat > /etc/issue.net <<'BANNER_EOF'
 </p>
 BANNER_EOF
 
-# Configurar Dropbear y OpenSSH para usar el banner
 sed -i 's|^DROPBEAR_BANNER=.*|DROPBEAR_BANNER="/etc/issue.net"|' /etc/default/dropbear 2>/dev/null || echo 'DROPBEAR_BANNER="/etc/issue.net"' >> /etc/default/dropbear
 sed -i 's|^#Banner none|Banner /etc/issue.net|' /etc/ssh/sshd_config 2>/dev/null || true
 sed -i 's|^Banner none|Banner /etc/issue.net|' /etc/ssh/sshd_config 2>/dev/null || true
 
-# 3. Configurar Dropbear
+# 3. Configurar Dropbear (Puerto interno 109)
 echo -e "${GREEN}[3/7] Configurando Dropbear (Puerto 109)...${NC}"
 sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear
 sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear
 
-# 4. Crear HTTP/WS Proxy Script Mejorado (Soporta Payloads Custom, HTTP, SSL+WS)
+# 4. Script Python WS Proxy Optimizado (Soporta Payloads Custom + 101 Switching Protocols con datos bidireccionales)
 echo -e "${GREEN}[4/7] Creando Servicio HTTP/WS Proxy...${NC}"
 cat > /usr/local/bin/ws-proxy.py <<'PROXY_EOF'
-import socket, threading, select
+import socket
+import select
+import _thread
 
 LISTENING_PORTS = [80, 8080]
-BUFLEN = 4096
-BACKLOG = 100
+TARGET_HOST = '127.0.0.1'
+TARGET_PORT = 109
+BUFLEN = 8192
+RESPONSE_101 = b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'
 
-class Proxy(threading.Thread):
-    def __init__(self, client, address):
-        super().__init__()
-        self.client = client
-        self.address = address
+def handler(client_socket, address):
+    try:
+        # Leer el payload inicial del cliente
+        request = client_socket.recv(BUFLEN)
+        if not request:
+            client_socket.close()
+            return
 
-    def run(self):
-        try:
-            data = self.client.recv(BUFLEN)
-            if data:
-                target = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                target.connect(('127.0.0.1', 109))
-                # Responder con 101 Switching Protocols para habilitar el túnel WebSocket / Custom Payload
-                self.client.sendall(b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n')
-                self.forward(self.client, target)
-        except Exception:
-            pass
-        finally:
-            self.client.close()
+        # Conectar al puerto interno de Dropbear (109)
+        target_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        target_socket.connect((TARGET_HOST, TARGET_PORT))
 
-    def forward(self, source, destination):
-        sockets = [source, destination]
+        # Enviar respuesta 101 al cliente
+        client_socket.sendall(RESPONSE_101)
+
+        # Puente de transmisión continua de datos (Bidireccional)
+        sockets = [client_socket, target_socket]
         while True:
-            read_sockets, _, _ = select.select(sockets, [], [])
-            for sock in read_sockets:
-                data = sock.recv(BUFLEN)
+            readable, _, errors = select.select(sockets, [], sockets, 10)
+            if errors:
+                break
+            for s in readable:
+                data = s.recv(BUFLEN)
                 if not data:
                     return
-                if sock is source:
-                    destination.sendall(data)
+                if s is client_socket:
+                    target_socket.sendall(data)
                 else:
-                    source.sendall(data)
+                    client_socket.sendall(data)
+    except Exception:
+        pass
+    finally:
+        client_socket.close()
+        try:
+            target_socket.close()
+        except Exception:
+            pass
 
-def start_server(port):
+def server_thread(port):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind(('0.0.0.0', port))
-    server.listen(BACKLOG)
+    server.listen(100)
     while True:
-        client, addr = server.accept()
-        threading.Thread(target=Proxy(client, addr).run).start()
+        try:
+            client, addr = server.accept()
+            _thread.start_new_thread(handler, (client, addr))
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     for port in LISTENING_PORTS:
-        threading.Thread(target=start_server, args=(port,)).start()
+        _thread.start_new_thread(server_thread, (port,))
+    while True:
+        pass
 PROXY_EOF
 
 cat > /etc/systemd/system/ws-proxy.service <<'WSPROXY_EOF'
@@ -112,7 +125,7 @@ Restart=always
 WantedBy=multi-user.target
 WSPROXY_EOF
 
-# 5. Configurar Stunnel4 (Puerto 443 -> Redirigido a WS Proxy en el puerto 80)
+# 5. Configurar Stunnel4 (Puerto SSL 443 -> Redirigido a WS Proxy en el puerto 80)
 echo -e "${GREEN}[5/7] Configurando Stunnel4 (Puerto 443)...${NC}"
 mkdir -p /etc/stunnel
 openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 -sha256 \
@@ -132,7 +145,6 @@ STUNNEL_EOF
 
 sed -i 's/ENABLED=0/ENABLED=1/' /etc/default/stunnel4 2>/dev/null || true
 
-# Crear archivo de servicio systemd dedicado para Stunnel4
 cat > /etc/systemd/system/stunnel4.service <<'STUNNEL_SERVICE_EOF'
 [Unit]
 Description=SSL tunnel for network daemon
@@ -170,7 +182,7 @@ Restart=always
 WantedBy=multi-user.target
 BADVPN_EOF
 
-# 7. Configurar Anti Multi-Login y Limpiador Automático
+# 7. Configurar Anti Multi-Login y Limpieza Automática
 echo -e "${GREEN}[7/7] Configurando Limitador y Limpieza Automática...${NC}"
 cat > /usr/local/bin/limiter.sh <<'LIMITER_EOF'
 #!/bin/bash
@@ -246,16 +258,16 @@ echo -e "${GREEN}Descargando Panel del Menú...${NC}"
 wget -q -O /usr/local/bin/menu.sh https://raw.githubusercontent.com/golbert19/golbert-vpn/main/menu.sh
 chmod +x /usr/local/bin/menu.sh
 
-# Configurar alias 'menu' para ingresar directo desde la terminal
 if ! grep -q "alias menu=" ~/.bashrc; then
     echo "alias menu='bash /usr/local/bin/menu.sh'" >> ~/.bashrc
 fi
 
-# Iniciar todos los servicios y configurar Firewall
+# Iniciar y habilitar servicios
 systemctl daemon-reload
 systemctl restart dropbear
 systemctl enable --now ws-proxy stunnel4 badvpn golbert-limiter
 
+# Abrir puertos en el firewall UFW
 ufw allow 22/tcp
 ufw allow 109/tcp
 ufw allow 443/tcp
