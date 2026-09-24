@@ -46,9 +46,9 @@ accept = 443
 connect = 127.0.0.1:109
 STUNNEL_EOF
 
-openssl req -new -x509 -days 365 -nodes -out /etc/stunnel/stunnel.pem -keyout /etc/stunnel/stunnel.pem -subj "/CN=golbert19" -quiet
-systemctl enable stunnel4 || true
-systemctl restart stunnel4 || systemctl restart stunnel || true
+openssl req -new -x509 -days 365 -nodes -out /etc/stunnel/stunnel.pem -keyout /etc/stunnel/stunnel.pem -subj "/CN=golbert19"
+systemctl enable stunnel4
+systemctl restart stunnel4 || systemctl restart stunnel
 
 ufw --force reset
 ufw allow 22/tcp
@@ -63,5 +63,7 @@ ufw allow out 80/tcp
 ufw allow out 53
 ufw --force enable
 ufw status
+systemctl status badvpn --no-pager
+systemctl status stunnel4 --no-pager
 
 echo "=== GOLBERT VPN OK ==="
