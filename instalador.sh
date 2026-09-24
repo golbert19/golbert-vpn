@@ -42,7 +42,7 @@ echo -e "${GREEN}[3/7] Configurando Dropbear (Puerto 109)...${NC}"
 sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear
 sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear
 
-# 4. Script Python WS Proxy Optimizado (Soporta Payloads Custom + 101 Switching Protocols con datos bidireccionales)
+# 4. Script Python WS Proxy
 echo -e "${GREEN}[4/7] Creando Servicio HTTP/WS Proxy...${NC}"
 cat > /usr/local/bin/ws-proxy.py <<'PROXY_EOF'
 import socket
@@ -57,20 +57,15 @@ RESPONSE_101 = b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConne
 
 def handler(client_socket, address):
     try:
-        # Leer el payload inicial del cliente
         request = client_socket.recv(BUFLEN)
         if not request:
             client_socket.close()
             return
 
-        # Conectar al puerto interno de Dropbear (109)
         target_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         target_socket.connect((TARGET_HOST, TARGET_PORT))
-
-        # Enviar respuesta 101 al cliente
         client_socket.sendall(RESPONSE_101)
 
-        # Puente de transmisión continua de datos (Bidireccional)
         sockets = [client_socket, target_socket]
         while True:
             readable, _, errors = select.select(sockets, [], sockets, 10)
@@ -182,26 +177,30 @@ Restart=always
 WantedBy=multi-user.target
 BADVPN_EOF
 
-# 7. Configurar Anti Multi-Login y Limpieza Automática
+# 7. Configurar Anti Multi-Login y Limpieza Automática Corregidos
 echo -e "${GREEN}[7/7] Configurando Limitador y Limpieza Automática...${NC}"
+touch /etc/golbert_limits.conf
+
 cat > /usr/local/bin/limiter.sh <<'LIMITER_EOF'
 #!/bin/bash
 LIMIT_FILE="/etc/golbert_limits.conf"
 [ ! -f "$LIMIT_FILE" ] && touch "$LIMIT_FILE"
-DEFAULT_LIMIT=1
+DEFAULT_LIMIT=2
 
 while true; do
     USERS=$(ps aux | grep -E 'dropbear|sshd' | grep -v grep | grep -v root | awk '{print $1}' | sort | uniq)
     for user in $USERS; do
-        USER_LIMIT=$(grep -w "^$user" "$LIMIT_FILE" | cut -d'=' -f2 || true)
-        USER_LIMIT=${USER_LIMIT:-$DEFAULT_LIMIT}
+        USER_LIMIT=$(grep -w "^$user" "$LIMIT_FILE" | cut -d'=' -f2 2>/dev/null || echo "")
+        if [ -z "$USER_LIMIT" ]; then
+            USER_LIMIT=$DEFAULT_LIMIT
+        fi
 
         PIDS=$(ps aux | grep -E 'dropbear|sshd' | grep -v grep | grep -w "^$user" | awk '{print $2}')
-        CONN_COUNT=$(echo "$PIDS" | wc -l)
+        CONN_COUNT=$(echo "$PIDS" | sed '/^$/d' | wc -l)
 
         if [ "$CONN_COUNT" -gt "$USER_LIMIT" ]; then
             EXCESS=$((CONN_COUNT - USER_LIMIT))
-            PIDS_TO_KILL=$(ps aux | grep -E 'dropbear|sshd' | grep -v grep | grep -w "^$user" | awk '{print $2}' | tail -n "$EXCESS")
+            PIDS_TO_KILL=$(echo "$PIDS" | tail -n "$EXCESS")
             for pid in $PIDS_TO_KILL; do
                 kill -9 "$pid" 2>/dev/null || true
             done
@@ -228,13 +227,12 @@ SERVICE_EOF
 
 cat > /usr/local/bin/expcleaner.sh <<'EXPCLEAN_EOF'
 #!/bin/bash
-hoy=$(date +%Y-%m-%d)
-hoy_sec=$(date -d "$hoy" +%s)
+hoy_sec=$(date +%s)
 
 while FS=':' read -r user _ uid _ _ _ _; do
     if [ "$uid" -ge 1000 ] && [ "$user" != "nobody" ]; then
-        exp_date=$(chage -l "$user" | grep "Account expires" | cut -d: -f2 | xargs)
-        if [ "$exp_date" != "never" ] && [ -n "$exp_date" ]; then
+        exp_date=$(chage -l "$user" 2>/dev/null | grep "Account expires" | cut -d: -f2 | xargs)
+        if [ -n "$exp_date" ] && [ "$exp_date" != "never" ]; then
             exp_sec=$(date -d "$exp_date" +%s 2>/dev/null || echo 0)
             if [ "$exp_sec" -gt 0 ] && [ "$exp_sec" -lt "$hoy_sec" ]; then
                 pkill -u "$user" 2>/dev/null || true
@@ -253,7 +251,7 @@ chmod +x /usr/local/bin/expcleaner.sh
 
 (crontab -l 2>/dev/null | grep -v "/usr/local/bin/expcleaner.sh" ; echo "0 */6 * * * /bin/bash /usr/local/bin/expcleaner.sh") | crontab -
 
-# Descargar el menú interactivo desde el repositorio
+# Descargar menú
 echo -e "${GREEN}Descargando Panel del Menú...${NC}"
 wget -q -O /usr/local/bin/menu.sh https://raw.githubusercontent.com/golbert19/golbert-vpn/main/menu.sh
 chmod +x /usr/local/bin/menu.sh
@@ -267,7 +265,7 @@ systemctl daemon-reload
 systemctl restart dropbear
 systemctl enable --now ws-proxy stunnel4 badvpn golbert-limiter
 
-# Abrir puertos en el firewall UFW
+# Abrir puertos en UFW
 ufw allow 22/tcp
 ufw allow 109/tcp
 ufw allow 443/tcp
