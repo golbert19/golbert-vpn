@@ -1,7 +1,3 @@
-cd /root/golbert-vpn
-rm install.sh
-
-cat > install.sh <<'ENDINSTALLER'
 #!/bin/bash
 set -e
 echo "=== GOLBERT VPN INSTALLER FIX ==="
@@ -13,7 +9,6 @@ systemctl enable v2ray --now || true
 
 sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear
 sed -i 's/DROPBEAR_PORT=22/DROPBEAR_PORT=109/' /etc/default/dropbear
-sed -i 's/DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-p 109"/' /etc/default/dropbear
 echo 'DROPBEAR_EXTRA_ARGS="-p 109"' > /etc/default/dropbear
 systemctl enable dropbear
 systemctl restart dropbear
@@ -55,7 +50,6 @@ openssl req -new -x509 -days 365 -nodes -out /etc/stunnel/stunnel.pem -keyout /e
 systemctl enable stunnel4 || true
 systemctl restart stunnel4 || systemctl restart stunnel || true
 
-cd /root/golbert-vpn
 ufw --force reset
 ufw allow 22/tcp
 ufw allow 80/tcp
@@ -71,9 +65,3 @@ ufw --force enable
 ufw status
 
 echo "=== GOLBERT VPN OK ==="
-ENDINSTALLER
-
-chmod +x install.sh
-git add install.sh
-git commit -m "fix EOF heredoc bug"
-git push origin main -f
