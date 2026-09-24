@@ -20,7 +20,7 @@ echo -e "${YELLOW}=====================================================${NC}"
 echo -e "${GREEN}[1/7] Actualizando paquetes del sistema...${NC}"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y && apt-get upgrade -y
-apt-get install -y curl wget net-tools ufw dropbear stunnel4 python3 cmake gcc gasp build-essential nano cron
+apt-get install -y curl wget net-tools ufw dropbear stunnel4 python3 cmake gcc build-essential nano cron
 
 # 2. Configurar Banner /etc/issue.net
 echo -e "${GREEN}[2/7] Configurando Banner por defecto...${NC}"
