@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# Colores para la instalación
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -177,7 +176,7 @@ Restart=always
 WantedBy=multi-user.target
 BADVPN_EOF
 
-# 7. Configurar Anti Multi-Login y Limpieza Automática Corregidos
+# 7. Configurar Anti Multi-Login y Limpieza Automática
 echo -e "${GREEN}[7/7] Configurando Limitador y Limpieza Automática...${NC}"
 touch /etc/golbert_limits.conf
 
@@ -251,9 +250,58 @@ chmod +x /usr/local/bin/expcleaner.sh
 
 (crontab -l 2>/dev/null | grep -v "/usr/local/bin/expcleaner.sh" ; echo "0 */6 * * * /bin/bash /usr/local/bin/expcleaner.sh") | crontab -
 
-# Descargar menú
-echo -e "${GREEN}Descargando Panel del Menú...${NC}"
-wget -q -O /usr/local/bin/menu.sh https://raw.githubusercontent.com/golbert19/golbert-vpn/main/menu.sh
+# Intentar descargar menú o generar uno local si falla la descarga (solución al error 404)
+echo -e "${GREEN}Configurando Panel del Menú...${NC}"
+if ! wget -q -O /usr/local/bin/menu.sh https://raw.githubusercontent.com/golbert19/golbert-vpn/main/menu.sh || [ ! -s /usr/local/bin/menu.sh ]; then
+    cat > /usr/local/bin/menu.sh <<'MENU_EOF'
+#!/bin/bash
+while true; do
+    clear
+    echo "================================="
+    echo "       PANEL GOLBERT VPN         "
+    echo "================================="
+    echo "1) Crear usuario SSH/VPN"
+    echo "2) Eliminar usuario"
+    echo "3) Ver usuarios activos"
+    echo "4) Estado de los servicios"
+    echo "0) Salir"
+    echo "================================="
+    read -rp "Seleccione una opción: " opt
+    case $opt in
+        1)
+            read -rp "Nombre de usuario: " u
+            read -rp "Contraseña: " p
+            read -rp "Días de duración: " d
+            useradd -m -s /bin/false "$u"
+            echo "$u:$p" | chpasswd
+            exp=$(date -d "+$d days" +%Y-%m-%d)
+            chage -E "$exp" "$u"
+            echo "Usuario $u creado hasta $exp"
+            read -rp "Presione Enter para continuar..."
+            ;;
+        2)
+            read -rp "Usuario a eliminar: " u
+            pkill -u "$u" 2>/dev/null || true
+            userdel -r "$u" 2>/dev/null || true
+            sed -i "/^$u=/d" /etc/golbert_limits.conf 2>/dev/null || true
+            echo "Usuario $u eliminado."
+            read -rp "Presione Enter para continuar..."
+            ;;
+        3)
+            echo "Usuarios conectados:"
+            ps aux | grep -E 'dropbear|sshd' | grep -v grep | grep -v root
+            read -rp "Presione Enter para continuar..."
+            ;;
+        4)
+            systemctl status ws-proxy stunnel4 badvpn dropbear --no-pager
+            read -rp "Presione Enter para continuar..."
+            ;;
+        0) exit 0 ;;
+        *) echo "Opción inválida" ;;
+    esac
+done
+MENU_EOF
+fi
 chmod +x /usr/local/bin/menu.sh
 
 if ! grep -q "alias menu=" ~/.bashrc; then
