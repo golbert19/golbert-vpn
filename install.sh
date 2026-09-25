@@ -1,8 +1,13 @@
 #!/bin/bash
 
+# Colores ANSI
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+WHITE='\033[1;37m'
 NC='\033[0m'
 
 if [ "$EUID" -ne 0 ]; then
@@ -10,22 +15,22 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Asegurar que /bin/nologin esté registrado en /etc/shells para Dropbear
+# Asegurar que /bin/nologin esté en /etc/shells
 if ! grep -q "^/bin/nologin$" /etc/shells; then
     echo "/bin/nologin" >> /etc/shells
 fi
 
-echo -e "${YELLOW}=====================================================${NC}"
+echo -e "${CYAN}=====================================================${NC}"
 echo -e "${YELLOW}         INSTALADOR AUTOMÁTICO GOLBERT VPN          ${NC}"
-echo -e "${YELLOW}=====================================================${NC}"
+echo -e "${CYAN}=====================================================${NC}"
 
-# 1. Actualizar repositorios e instalar paquetes base
+# 1. Actualizar e instalar paquetes
 echo -e "${GREEN}[1/7] Actualizando paquetes del sistema...${NC}"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y && apt-get upgrade -y
-apt-get install -y curl wget net-tools ufw dropbear stunnel4 python3 cmake gcc build-essential nano cron
+apt-get install -y curl wget net-tools ufw dropbear stunnel4 python3 cmake gcc build-essential nano cron lsb-release
 
-# 2. Configurar Banner /etc/issue.net
+# 2. Configurar Banner inicial
 echo -e "${GREEN}[2/7] Configurando Banner por defecto...${NC}"
 cat > /etc/issue.net <<'BANNER_EOF'
 =================================
@@ -38,13 +43,13 @@ sed -i 's|^DROPBEAR_BANNER=.*|DROPBEAR_BANNER="/etc/issue.net"|' /etc/default/dr
 sed -i 's|^#Banner none|Banner /etc/issue.net|' /etc/ssh/sshd_config 2>/dev/null || true
 sed -i 's|^Banner none|Banner /etc/issue.net|' /etc/ssh/sshd_config 2>/dev/null || true
 
-# 3. Configurar Dropbear (Puerto interno 109 y habilitar contraseñas)
+# 3. Configurar Dropbear
 echo -e "${GREEN}[3/7] Configurando Dropbear (Puerto 109)...${NC}"
 sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear 2>/dev/null || true
 sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear 2>/dev/null || true
 sed -i 's/DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-p 109"/' /etc/default/dropbear 2>/dev/null || true
 
-# 4. Script Python WS Proxy
+# 4. Proxy Python WS
 echo -e "${GREEN}[4/7] Creando Servicio HTTP/WS Proxy...${NC}"
 cat > /usr/local/bin/ws-proxy.py <<'PROXY_EOF'
 import socket
@@ -129,7 +134,7 @@ Restart=always
 WantedBy=multi-user.target
 WSPROXY_EOF
 
-# 5. Configurar Stunnel4
+# 5. Stunnel4
 echo -e "${GREEN}[5/7] Configurando Stunnel4 (Puerto 443)...${NC}"
 mkdir -p /etc/stunnel
 openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 -sha256 \
@@ -162,7 +167,7 @@ Restart=always
 WantedBy=multi-user.target
 STUNNEL_SERVICE_EOF
 
-# 6. Instalar BadVPN (UDPGW)
+# 6. BadVPN
 echo -e "${GREEN}[6/7] Compilando e Instalando BadVPN UDPGW...${NC}"
 if wget -q -O /tmp/badvpn.tar.gz https://github.com/ambrop72/badvpn/archive/refs/tags/1.999.130.tar.gz; then
     cd /tmp && tar -xf badvpn.tar.gz && cd badvpn-1.999.130
@@ -185,8 +190,8 @@ Restart=always
 WantedBy=multi-user.target
 BADVPN_EOF
 
-# 7. Configurar Anti Multi-Login, Limpieza y Menú
-echo -e "${GREEN}[7/7] Configurando Limitador, Limpieza y Panel...${NC}"
+# 7. Limites, Limpieza y Menú Avanzado
+echo -e "${GREEN}[7/7] Configurando Limitador, Limpieza y Menú...${NC}"
 touch /etc/golbert_limits.conf
 
 cat > /usr/local/bin/limiter.sh <<'LIMITER_EOF'
@@ -257,62 +262,132 @@ truncate -s 0 /var/log/auth.log 2>/dev/null || true
 EXPCLEAN_EOF
 chmod +x /usr/local/bin/expcleaner.sh
 
-# Configurar Crontab de manera segura
 (crontab -l 2>/dev/null | grep -v "/usr/local/bin/expcleaner.sh"; echo "0 */6 * * * /bin/bash /usr/local/bin/expcleaner.sh") | crontab - 2>/dev/null || true
 
-# Crear script del Menú
+# Script del Menú Colorido y Completo
 cat > /usr/local/bin/menu <<'MENU_EOF'
 #!/bin/bash
+
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+WHITE='\033[1;37m'
+NC='\033[0m'
+
+draw_bar() {
+    local pct=$1
+    local width=18
+    local filled=$(( pct * width / 100 ))
+    local empty=$(( width - filled ))
+    local bar="["
+    for ((i=0; i<filled; i++)); do bar+="|"; done
+    for ((i=0; i<empty; i++)); do bar+=" "; done
+    bar+="]"
+    echo "$bar"
+}
+
 while true; do
     clear
-    echo "================================="
-    echo "       PANEL GOLBERT VPN         "
-    echo "================================="
-    echo "1) Crear usuario SSH/VPN"
-    echo "2) Eliminar usuario"
-    echo "3) Ver usuarios activos"
-    echo "4) Estado de los servicios"
-    echo "0) Salir"
-    echo "================================="
-    read -rp "Seleccione una opción: " opt
+    
+    OS_INFO=$(lsb_release -ds 2>/dev/null || cat /etc/issue | head -n1 | xargs || echo "Linux")
+    UPTIME_INFO=$(uptime -p | sed 's/up //')
+    IP_PUB=$(curl -s --max-time 2 https://api.ipify.org || hostname -I | awk '{print $1}')
+    
+    DISK_TOTAL=$(df -h / | awk 'NR==2 {print $2}')
+    DISK_USED=$(df -h / | awk 'NR==2 {print $3}')
+    DISK_FREE=$(df -h / | awk 'NR==2 {print $4}')
+    
+    CPU_CORES=$(nproc)
+    CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}' | cut -d'.' -f1)
+    [ -z "$CPU_USAGE" ] && CPU_USAGE=0
+    CPU_BAR=$(draw_bar "$CPU_USAGE")
+    
+    RAM_TOTAL=$(free -m | awk '/Mem:/ {print $2}')
+    RAM_USED=$(free -m | awk '/Mem:/ {print $3}')
+    RAM_FREE=$(free -m | awk '/Mem:/ {print $4}')
+    RAM_PCT=$(( RAM_USED * 100 / RAM_TOTAL ))
+    RAM_BAR=$(draw_bar "$RAM_PCT")
+
+    ONLINE_USERS=$(ps aux | grep -E 'dropbear|sshd' | grep -v grep | grep -v root | awk '{print $1}' | sort | uniq | wc -l)
+
+    echo -e "${RED}───────────────────────────────────────────────────────────────${NC}"
+    echo -e " ${CYAN}OS      :${NC} ${WHITE}$OS_INFO${NC}"
+    echo -e " ${CYAN}UPTIME  :${NC} ${WHITE}$UPTIME_INFO${NC}"
+    echo -e " ${CYAN}IP/DOM  :${NC} ${WHITE}$IP_PUB${NC}"
+    echo -e " ${CYAN}ONLINE  :${NC} ${GREEN}${ONLINE_USERS} usuario(s) activo(s)${NC}"
+    echo -e " ${CYAN}DISCO   :${NC} Total ${WHITE}${DISK_TOTAL}${NC}     Uso ${WHITE}${DISK_USED}${NC}     Libre ${WHITE}${DISK_FREE}${NC}"
+    echo -e " ${CYAN}CPU     :${NC} ${BLUE}${CPU_BAR}${NC} ${YELLOW}${CPU_USAGE}.0%${NC}   Cores: ${WHITE}$CPU_CORES${NC}"
+    echo -e " ${CYAN}RAM     :${NC} ${BLUE}${RAM_BAR}${NC} ${YELLOW}${RAM_USED}M/${RAM_TOTAL}M${NC}   Libre: ${WHITE}${RAM_FREE}M${NC}"
+    echo -e "${RED}───────────────────────────────────────────────────────────────${NC}"
+    echo -e "             ${MAGENTA}PANEL DE CONTROL GOLBERT VPN${NC}"
+    echo -e "${RED}───────────────────────────────────────────────────────────────${NC}"
+    echo -e " ${GREEN}[1]${NC} Crear usuario SSH/VPN"
+    echo -e " ${GREEN}[2]${NC} Eliminar usuario"
+    echo -e " ${GREEN}[3]${NC} Ver usuarios activos en detalle"
+    echo -e " ${GREEN}[4]${NC} Cambiar / Configurar Banner"
+    echo -e " ${GREEN}[5]${NC} Estado de los servicios"
+    echo -e " ${GREEN}[0]${NC} Salir"
+    echo -e "${RED}───────────────────────────────────────────────────────────────${NC}"
+    read -rp " Seleccione una opción: " opt
+
     case $opt in
-       1)
-            read -rp "Nombre de usuario: " u
-            read -rp "Contraseña: " p
-            read -rp "Días de duración: " d
-            
-            # Crear usuario con shell nologin para túneles SSH/VPN
+        1)
+            echo ""
+            read -rp " Nombre de usuario: " u
+            read -rp " Contraseña: " p
+            read -rp " Días de duración: " d
             useradd -M -s /bin/nologin "$u" 2>/dev/null || true
             echo "$u:$p" | chpasswd
-            
-            # Establecer fecha de expiración
             exp=$(date -d "+$d days" +%Y-%m-%d)
             chage -E "$exp" "$u"
-            
             echo ""
-            echo "Usuario $u creado exitosamente hasta $exp"
-            read -rp "Presione Enter para continuar..."
+            echo -e "${GREEN}✓ Usuario $u creado exitosamente hasta $exp${NC}"
+            read -rp " Presione Enter para continuar..."
             ;;
-
         2)
-            read -rp "Usuario a eliminar: " u
+            echo ""
+            read -rp " Usuario a eliminar: " u
             pkill -u "$u" 2>/dev/null || true
             userdel -r "$u" 2>/dev/null || true
             sed -i "/^$u=/d" /etc/golbert_limits.conf 2>/dev/null || true
-            echo "Usuario $u eliminado."
-            read -rp "Presione Enter para continuar..."
+            echo -e "${YELLOW}✓ Usuario $u eliminado.${NC}"
+            read -rp " Presione Enter para continuar..."
             ;;
         3)
-            echo "Usuarios conectados:"
-            ps aux | grep -E 'dropbear|sshd' | grep -v grep | grep -v root
-            read -rp "Presione Enter para continuar..."
+            echo ""
+            echo -e "${CYAN}────────────── USUARIOS CONECTADOS ONLINE ──────────────${NC}"
+            ps aux | grep -E 'dropbear|sshd' | grep -v grep | grep -v root | awk '{print "Usuario: "$1" | PID: "$2}'
+            echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
+            read -rp " Presione Enter para continuar..."
             ;;
         4)
-            systemctl status ws-proxy stunnel4 badvpn dropbear --no-pager
-            read -rp "Presione Enter para continuar..."
+            echo ""
+            echo -e "${MAGENTA}--- Configuración de Banner (/etc/issue.net) ---${NC}"
+            echo -e "Banner actual:"
+            echo -e "${YELLOW}"
+            cat /etc/issue.net
+            echo -e "${NC}"
+            read -rp "¿Desea editar el banner con Nano? (s/n): " ed
+            if [[ "$ed" =~ ^[Ss]$ ]]; then
+                nano /etc/issue.net
+                systemctl restart dropbear 2>/dev/null || true
+                systemctl restart ssh 2>/dev/null || true
+                echo -e "${GREEN}✓ Banner actualizado exitosamente.${NC}"
+            fi
+            read -rp " Presione Enter para continuar..."
             ;;
-        0) exit 0 ;;
-        *) echo "Opción inválida" ;;
+        5)
+            echo ""
+            echo -e "${CYAN}────────────── ESTADO DE SERVICIOS ──────────────${NC}"
+            systemctl status ws-proxy stunnel4 badvpn dropbear --no-pager
+            echo -e "${CYAN}──────────────────────────────────────────────────${NC}"
+            read -rp " Presione Enter para continuar..."
+            ;;
+        0) clear; exit 0 ;;
+        *) echo -e "${RED}Opción inválida${NC}"; sleep 1 ;;
     esac
 done
 MENU_EOF
@@ -321,12 +396,10 @@ chmod +x /usr/local/bin/menu
 cp /usr/local/bin/menu /usr/bin/menu 2>/dev/null || true
 cp /usr/local/bin/menu /usr/local/sbin/menu 2>/dev/null || true
 
-# Iniciar y habilitar servicios
 systemctl daemon-reload >/dev/null 2>&1 || true
 systemctl restart dropbear >/dev/null 2>&1 || true
 systemctl enable --now ws-proxy stunnel4 badvpn golbert-limiter >/dev/null 2>&1 || true
 
-# Abrir puertos en UFW
 ufw allow 22/tcp >/dev/null 2>&1 || true
 ufw allow 109/tcp >/dev/null 2>&1 || true
 ufw allow 443/tcp >/dev/null 2>&1 || true
@@ -339,5 +412,4 @@ echo -e "${GREEN}=====================================================${NC}"
 echo -e "${GREEN}     ¡INSTALACIÓN COMPLETADA EXITOSAMENTE!           ${NC}"
 echo -e "${GREEN}=====================================================${NC}"
 
-# Abrir el menú automáticamente
 /usr/local/bin/menu
