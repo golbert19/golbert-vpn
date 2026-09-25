@@ -254,7 +254,7 @@ chmod +x /usr/local/bin/expcleaner.sh
 
 (crontab -l 2>/dev/null || true) | grep -v "/usr/local/bin/expcleaner.sh" | { cat; echo "0 */6 * * * /bin/bash /usr/local/bin/expcleaner.sh"; } | crontab -
 
-# Creación directa del comando 'menu' en el sistema
+# Creación del ejecutable 'menu' directamente en rutas de sistema
 cat > /usr/local/bin/menu <<'MENU_EOF'
 #!/bin/bash
 while true; do
@@ -324,4 +324,6 @@ echo "y" | ufw enable >/dev/null 2>&1 || true
 echo -e "${GREEN}=====================================================${NC}"
 echo -e "${GREEN}     ¡INSTALACIÓN COMPLETADA EXITOSAMENTE!           ${NC}"
 echo -e "${GREEN}=====================================================${NC}"
-echo -e "Escribe ${YELLOW}menu${NC} para ingresar al panel."
+
+# Ejecutar el menú automáticamente al terminar la instalación
+/usr/local/bin/menu
