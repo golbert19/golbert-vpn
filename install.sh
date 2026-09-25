@@ -1,5 +1,4 @@
 #!/bin/bash
-set -euo pipefail
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -36,8 +35,8 @@ sed -i 's|^Banner none|Banner /etc/issue.net|' /etc/ssh/sshd_config 2>/dev/null 
 
 # 3. Configurar Dropbear (Puerto interno 109)
 echo -e "${GREEN}[3/7] Configurando Dropbear (Puerto 109)...${NC}"
-sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear
-sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear
+sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear 2>/dev/null || true
+sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear 2>/dev/null || true
 
 # 4. Script Python WS Proxy
 echo -e "${GREEN}[4/7] Creando Servicio HTTP/WS Proxy...${NC}"
@@ -162,8 +161,8 @@ echo -e "${GREEN}[6/7] Compilando e Instalando BadVPN UDPGW...${NC}"
 if wget -q -O /tmp/badvpn.tar.gz https://github.com/ambrop72/badvpn/archive/refs/tags/1.999.130.tar.gz; then
     cd /tmp && tar -xf badvpn.tar.gz && cd badvpn-1.999.130
     mkdir -p build && cd build
-    cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1 >/dev/null
-    make install >/dev/null
+    cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1 >/dev/null 2>&1
+    make install >/dev/null 2>&1
     cd / && rm -rf /tmp/badvpn*
 fi
 
@@ -252,9 +251,10 @@ truncate -s 0 /var/log/auth.log 2>/dev/null || true
 EXPCLEAN_EOF
 chmod +x /usr/local/bin/expcleaner.sh
 
-(crontab -l 2>/dev/null || true) | grep -v "/usr/local/bin/expcleaner.sh" | { cat; echo "0 */6 * * * /bin/bash /usr/local/bin/expcleaner.sh"; } | crontab -
+# Configurar Crontab de manera segura
+(crontab -l 2>/dev/null | grep -v "/usr/local/bin/expcleaner.sh"; echo "0 */6 * * * /bin/bash /usr/local/bin/expcleaner.sh") | crontab - 2>/dev/null || true
 
-# Creación del ejecutable 'menu' directamente en rutas de sistema
+# Crear script del Menú
 cat > /usr/local/bin/menu <<'MENU_EOF'
 #!/bin/bash
 while true; do
@@ -306,24 +306,25 @@ MENU_EOF
 
 chmod +x /usr/local/bin/menu
 cp /usr/local/bin/menu /usr/bin/menu 2>/dev/null || true
+cp /usr/local/bin/menu /usr/local/sbin/menu 2>/dev/null || true
 
 # Iniciar y habilitar servicios
-systemctl daemon-reload
-systemctl restart dropbear
-systemctl enable --now ws-proxy stunnel4 badvpn golbert-limiter
+systemctl daemon-reload >/dev/null 2>&1 || true
+systemctl restart dropbear >/dev/null 2>&1 || true
+systemctl enable --now ws-proxy stunnel4 badvpn golbert-limiter >/dev/null 2>&1 || true
 
 # Abrir puertos en UFW
-ufw allow 22/tcp
-ufw allow 109/tcp
-ufw allow 443/tcp
-ufw allow 80/tcp
-ufw allow 8080/tcp
-ufw allow 7300/udp
+ufw allow 22/tcp >/dev/null 2>&1 || true
+ufw allow 109/tcp >/dev/null 2>&1 || true
+ufw allow 443/tcp >/dev/null 2>&1 || true
+ufw allow 80/tcp >/dev/null 2>&1 || true
+ufw allow 8080/tcp >/dev/null 2>&1 || true
+ufw allow 7300/udp >/dev/null 2>&1 || true
 echo "y" | ufw enable >/dev/null 2>&1 || true
 
 echo -e "${GREEN}=====================================================${NC}"
 echo -e "${GREEN}     ¡INSTALACIÓN COMPLETADA EXITOSAMENTE!           ${NC}"
 echo -e "${GREEN}=====================================================${NC}"
 
-# Ejecutar el menú automáticamente al terminar la instalación
+# Abrir el menú automáticamente
 /usr/local/bin/menu
