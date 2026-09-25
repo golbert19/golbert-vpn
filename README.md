@@ -48,7 +48,9 @@ Permisos: Acceso root completo.
 📞 Contacto y Soporte
 Si tienes dudas, necesitas asistencia con la instalación o quieres adquirir accesos, puedes contactarme directamente a través de mis redes oficiales:
 
+https://t.me/vpsgratis2026
 
+https://wa.me/51960084993
 
 ## ⚡ Instalación Rápida
 Ejecuta el siguiente comando en tu terminal con acceso `root`:
