@@ -330,3 +330,9 @@ echo -e "${GREEN}=====================================================${NC}"
 echo -e "${GREEN}     ¡INSTALACIÓN COMPLETADA EXITOSAMENTE!           ${NC}"
 echo -e "${GREEN}=====================================================${NC}"
 echo -e "Escribe ${YELLOW}menu${NC} o ejecuta ${YELLOW}bash /usr/local/bin/menu.sh${NC} para abrir el panel."
+# 1. Copiar el script del menú a la carpeta de binarios del sistema
+cp ./menu.sh /usr/local/sbin/menu
+
+# 2. Darle permisos de ejecución
+chmod +x /usr/local/sbin/menu
+
