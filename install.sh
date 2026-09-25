@@ -10,6 +10,11 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Asegurar que /bin/nologin esté registrado en /etc/shells para Dropbear
+if ! grep -q "^/bin/nologin$" /etc/shells; then
+    echo "/bin/nologin" >> /etc/shells
+fi
+
 echo -e "${YELLOW}=====================================================${NC}"
 echo -e "${YELLOW}         INSTALADOR AUTOMÁTICO GOLBERT VPN          ${NC}"
 echo -e "${YELLOW}=====================================================${NC}"
@@ -33,10 +38,11 @@ sed -i 's|^DROPBEAR_BANNER=.*|DROPBEAR_BANNER="/etc/issue.net"|' /etc/default/dr
 sed -i 's|^#Banner none|Banner /etc/issue.net|' /etc/ssh/sshd_config 2>/dev/null || true
 sed -i 's|^Banner none|Banner /etc/issue.net|' /etc/ssh/sshd_config 2>/dev/null || true
 
-# 3. Configurar Dropbear (Puerto interno 109)
+# 3. Configurar Dropbear (Puerto interno 109 y habilitar contraseñas)
 echo -e "${GREEN}[3/7] Configurando Dropbear (Puerto 109)...${NC}"
 sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear 2>/dev/null || true
 sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear 2>/dev/null || true
+sed -i 's/DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-p 109"/' /etc/default/dropbear 2>/dev/null || true
 
 # 4. Script Python WS Proxy
 echo -e "${GREEN}[4/7] Creando Servicio HTTP/WS Proxy...${NC}"
@@ -275,7 +281,7 @@ while true; do
             read -rp "Contraseña: " p
             read -rp "Días de duración: " d
             
-            # Crear usuario permitiendo la sesión para túneles SSH/VPN
+            # Crear usuario con shell nologin para túneles SSH/VPN
             useradd -M -s /bin/nologin "$u" 2>/dev/null || true
             echo "$u:$p" | chpasswd
             
@@ -283,6 +289,7 @@ while true; do
             exp=$(date -d "+$d days" +%Y-%m-%d)
             chage -E "$exp" "$u"
             
+            echo ""
             echo "Usuario $u creado exitosamente hasta $exp"
             read -rp "Presione Enter para continuar..."
             ;;
