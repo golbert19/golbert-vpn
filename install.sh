@@ -180,8 +180,8 @@ Restart=always
 WantedBy=multi-user.target
 BADVPN_EOF
 
-# 7. Configurar Anti Multi-Login y Limpieza Automática
-echo -e "${GREEN}[7/7] Configurando Limitador y Limpieza Automática...${NC}"
+# 7. Configurar Anti Multi-Login, Limpieza y Menú
+echo -e "${GREEN}[7/7] Configurando Limitador, Limpieza y Panel...${NC}"
 touch /etc/golbert_limits.conf
 
 cat > /usr/local/bin/limiter.sh <<'LIMITER_EOF'
@@ -254,8 +254,7 @@ chmod +x /usr/local/bin/expcleaner.sh
 
 (crontab -l 2>/dev/null || true) | grep -v "/usr/local/bin/expcleaner.sh" | { cat; echo "0 */6 * * * /bin/bash /usr/local/bin/expcleaner.sh"; } | crontab -
 
-# Configuración directa del ejecutable menu
-echo -e "${GREEN}Instalando el ejecutable del menú...${NC}"
+# Creación directa del comando 'menu' en el sistema
 cat > /usr/local/bin/menu <<'MENU_EOF'
 #!/bin/bash
 while true; do
@@ -305,7 +304,6 @@ while true; do
 done
 MENU_EOF
 
-# Asignación de permisos de ejecución directos
 chmod +x /usr/local/bin/menu
 cp /usr/local/bin/menu /usr/bin/menu 2>/dev/null || true
 
@@ -326,4 +324,4 @@ echo "y" | ufw enable >/dev/null 2>&1 || true
 echo -e "${GREEN}=====================================================${NC}"
 echo -e "${GREEN}     ¡INSTALACIÓN COMPLETADA EXITOSAMENTE!           ${NC}"
 echo -e "${GREEN}=====================================================${NC}"
-echo -e "Escribe ${YELLOW}menu${NC} para abrir el panel inmediatamente."
+echo -e "Escribe ${YELLOW}menu${NC} para ingresar al panel."
