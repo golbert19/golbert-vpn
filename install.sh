@@ -270,17 +270,23 @@ while true; do
     echo "================================="
     read -rp "Seleccione una opción: " opt
     case $opt in
-        1)
+       1)
             read -rp "Nombre de usuario: " u
             read -rp "Contraseña: " p
             read -rp "Días de duración: " d
-            useradd -m -s /bin/false "$u"
+            
+            # Crear usuario permitiendo la sesión para túneles SSH/VPN
+            useradd -M -s /bin/nologin "$u" 2>/dev/null || true
             echo "$u:$p" | chpasswd
+            
+            # Establecer fecha de expiración
             exp=$(date -d "+$d days" +%Y-%m-%d)
             chage -E "$exp" "$u"
-            echo "Usuario $u creado hasta $exp"
+            
+            echo "Usuario $u creado exitosamente hasta $exp"
             read -rp "Presione Enter para continuar..."
             ;;
+
         2)
             read -rp "Usuario a eliminar: " u
             pkill -u "$u" 2>/dev/null || true
