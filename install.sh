@@ -21,7 +21,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -y && apt-get upgrade -y
 apt-get install -y curl wget net-tools ufw dropbear stunnel4 python3 cmake gcc build-essential nano cron
 
-# 2. Configurar Banner /etc/issue.net (Texto plano formateado)
+# 2. Configurar Banner /etc/issue.net
 echo -e "${GREEN}[2/7] Configurando Banner por defecto...${NC}"
 cat > /etc/issue.net <<'BANNER_EOF'
 =================================
@@ -39,7 +39,7 @@ echo -e "${GREEN}[3/7] Configurando Dropbear (Puerto 109)...${NC}"
 sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear
 sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear
 
-# 4. Script Python WS Proxy (Corregido alto consumo de CPU)
+# 4. Script Python WS Proxy
 echo -e "${GREEN}[4/7] Creando Servicio HTTP/WS Proxy...${NC}"
 cat > /usr/local/bin/ws-proxy.py <<'PROXY_EOF'
 import socket
@@ -124,7 +124,7 @@ Restart=always
 WantedBy=multi-user.target
 WSPROXY_EOF
 
-# 5. Configurar Stunnel4 (Puerto SSL 443 -> Redirigido a WS Proxy en el puerto 80)
+# 5. Configurar Stunnel4
 echo -e "${GREEN}[5/7] Configurando Stunnel4 (Puerto 443)...${NC}"
 mkdir -p /etc/stunnel
 openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 -sha256 \
@@ -157,7 +157,7 @@ Restart=always
 WantedBy=multi-user.target
 STUNNEL_SERVICE_EOF
 
-# 6. Instalar BadVPN (UDPGW) en Puerto 7300
+# 6. Instalar BadVPN (UDPGW)
 echo -e "${GREEN}[6/7] Compilando e Instalando BadVPN UDPGW...${NC}"
 if wget -q -O /tmp/badvpn.tar.gz https://github.com/ambrop72/badvpn/archive/refs/tags/1.999.130.tar.gz; then
     cd /tmp && tar -xf badvpn.tar.gz && cd badvpn-1.999.130
@@ -252,12 +252,11 @@ truncate -s 0 /var/log/auth.log 2>/dev/null || true
 EXPCLEAN_EOF
 chmod +x /usr/local/bin/expcleaner.sh
 
-# Manejo seguro del crontab sin fallar por set -e
 (crontab -l 2>/dev/null || true) | grep -v "/usr/local/bin/expcleaner.sh" | { cat; echo "0 */6 * * * /bin/bash /usr/local/bin/expcleaner.sh"; } | crontab -
 
-echo -e "${GREEN}Configurando Panel del Menú...${NC}"
-if ! wget -q -O /usr/local/bin/menu.sh https://raw.githubusercontent.com/golbert19/golbert-vpn/main/menu.sh || [ ! -s /usr/local/bin/menu.sh ]; then
-    cat > /usr/local/bin/menu.sh <<'MENU_EOF'
+# Configuración directa del ejecutable menu
+echo -e "${GREEN}Instalando el ejecutable del menú...${NC}"
+cat > /usr/local/bin/menu <<'MENU_EOF'
 #!/bin/bash
 while true; do
     clear
@@ -305,12 +304,10 @@ while true; do
     esac
 done
 MENU_EOF
-fi
-chmod +x /usr/local/bin/menu.sh
 
-if ! grep -q "alias menu=" ~/.bashrc; then
-    echo "alias menu='bash /usr/local/bin/menu.sh'" >> ~/.bashrc
-fi
+# Asignación de permisos de ejecución directos
+chmod +x /usr/local/bin/menu
+cp /usr/local/bin/menu /usr/bin/menu 2>/dev/null || true
 
 # Iniciar y habilitar servicios
 systemctl daemon-reload
@@ -329,10 +326,4 @@ echo "y" | ufw enable >/dev/null 2>&1 || true
 echo -e "${GREEN}=====================================================${NC}"
 echo -e "${GREEN}     ¡INSTALACIÓN COMPLETADA EXITOSAMENTE!           ${NC}"
 echo -e "${GREEN}=====================================================${NC}"
-echo -e "Escribe ${YELLOW}menu${NC} o ejecuta ${YELLOW}bash /usr/local/bin/menu.sh${NC} para abrir el panel."
-# 1. Copiar el script del menú a la carpeta de binarios del sistema
-cp ./menu.sh /usr/local/sbin/menu
-
-# 2. Darle permisos de ejecución
-chmod +x /usr/local/sbin/menu
-
+echo -e "Escribe ${YELLOW}menu${NC} para abrir el panel inmediatamente."
