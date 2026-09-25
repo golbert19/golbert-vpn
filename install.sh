@@ -48,7 +48,7 @@ sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear 2>/dev/null || true
 sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear 2>/dev/null || true
 sed -i 's/DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-p 109"/' /etc/default/dropbear 2>/dev/null || true
 
-# 4. Proxy Python WS Universal (Acepta PACTH / PATCH / GET / CONNECT / etc)
+# 4. Proxy Python WS Universal (Acepta GET / POST /PUT / HEAD / OPTIONS / PATCH / DELETE / CONNECT / PROPFIND / PROPPATCH / MKCOL / COPY /MOVE / LOCK / UNLOCK / UPDATE / etc)
 echo -e "${GREEN}[4/7] Creando Servicio HTTP/WS Proxy Universal...${NC}"
 cat > /usr/local/bin/ws-proxy.py <<'PROXY_EOF'
 import socket
