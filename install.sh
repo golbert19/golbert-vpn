@@ -15,7 +15,6 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Asegurar /bin/nologin en /etc/shells
 if ! grep -q "^/bin/nologin$" /etc/shells; then
     echo "/bin/nologin" >> /etc/shells
 fi
@@ -24,13 +23,11 @@ echo -e "${CYAN}=====================================================${NC}"
 echo -e "${YELLOW}         INSTALADOR AUTOMÁTICO GOLBERT VPN          ${NC}"
 echo -e "${CYAN}=====================================================${NC}"
 
-# 1. Actualizar e instalar paquetes
 echo -e "${GREEN}[1/7] Actualizando paquetes del sistema...${NC}"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y && apt-get upgrade -y
 apt-get install -y curl wget net-tools ufw dropbear stunnel4 python3 cmake gcc build-essential nano cron lsb-release
 
-# 2. Configurar Banner inicial
 echo -e "${GREEN}[2/7] Configurando Banner por defecto...${NC}"
 cat > /etc/issue.net <<'BANNER_EOF'
 =================================
@@ -43,13 +40,11 @@ sed -i 's|^DROPBEAR_BANNER=.*|DROPBEAR_BANNER="/etc/issue.net"|' /etc/default/dr
 sed -i 's|^#Banner none|Banner /etc/issue.net|' /etc/ssh/sshd_config 2>/dev/null || true
 sed -i 's|^Banner none|Banner /etc/issue.net|' /etc/ssh/sshd_config 2>/dev/null || true
 
-# 3. Configurar Dropbear
 echo -e "${GREEN}[3/7] Configurando Dropbear (Puerto 109)...${NC}"
 sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear 2>/dev/null || true
 sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear 2>/dev/null || true
 sed -i 's/DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-p 109"/' /etc/default/dropbear 2>/dev/null || true
 
-# 4. Proxy Python WS Adaptativo
 echo -e "${GREEN}[4/7] Creando Servicio HTTP/WS Proxy...${NC}"
 cat > /usr/local/bin/ws-proxy.py <<'PROXY_EOF'
 import socket
@@ -74,7 +69,9 @@ def handler(client_socket, address):
         target_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         target_socket.connect((TARGET_HOST, TARGET_PORT))
 
-        if b'HTTP/' in request or b'GET' in request or b'POST' in request or b'CONNECT' in request:
+        # Responder 101 si viene solicitud HTTP/WS
+        req_upper = request.upper()
+        if b'HTTP/' in req_upper or b'GET' in req_upper or b'POST' in req_upper or b'PATCH' in req_upper or b'CONNECT' in req_upper:
             client_socket.sendall(RESPONSE_101)
         else:
             target_socket.sendall(request)
@@ -138,11 +135,10 @@ Restart=always
 WantedBy=multi-user.target
 WSPROXY_EOF
 
-# 5. Configurar Stunnel4 (SSL Puerto 443 -> Proxy WS Puerto 80)
-echo -e "${GREEN}[5/7] Configurando Stunnel4 (SSL/TLS en Puerto 443)...${NC}"
+echo -e "${GREEN}[5/7] Configurando Stunnel4 (SSL Puerto 443 -> Proxy WS)...${NC}"
 mkdir -p /etc/stunnel
 openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 -sha256 \
-    -subj "/C=US/ST=State/L=City/O=GolbertVPN/CN=golbert.vpn" \
+    -subj "/C=US/ST=State/L=City/O=GolbertVPN/CN=tana22.golbert-vps.cloud" \
     -keyout /etc/stunnel/stunnel.pem -out /etc/stunnel/stunnel.pem >/dev/null 2>&1
 
 cat > /etc/stunnel/stunnel.conf <<'STUNNEL_EOF'
@@ -171,7 +167,6 @@ Restart=always
 WantedBy=multi-user.target
 STUNNEL_SERVICE_EOF
 
-# 6. BadVPN
 echo -e "${GREEN}[6/7] Compilando e Instalando BadVPN UDPGW...${NC}"
 if wget -q -O /tmp/badvpn.tar.gz https://github.com/ambrop72/badvpn/archive/refs/tags/1.999.130.tar.gz; then
     cd /tmp && tar -xf badvpn.tar.gz && cd badvpn-1.999.130
@@ -194,10 +189,9 @@ Restart=always
 WantedBy=multi-user.target
 BADVPN_EOF
 
-# 7. Limites, Limpieza y Menú Avanzado
 echo -e "${GREEN}[7/7] Configurando Limitador, Limpieza y Menú...${NC}"
 touch /etc/golbert_limits.conf
-touch /etc/golbert_domain.conf
+echo "tana22.golbert-vps.cloud" > /etc/golbert_domain.conf
 
 cat > /usr/local/bin/limiter.sh <<'LIMITER_EOF'
 #!/bin/bash
@@ -269,7 +263,6 @@ chmod +x /usr/local/bin/expcleaner.sh
 
 (crontab -l 2>/dev/null | grep -v "/usr/local/bin/expcleaner.sh"; echo "0 */6 * * * /bin/bash /usr/local/bin/expcleaner.sh") | crontab - 2>/dev/null || true
 
-# Script del Menú Colorido
 cat > /usr/local/bin/menu <<'MENU_EOF'
 #!/bin/bash
 
@@ -440,17 +433,12 @@ while true; do
             echo ""
             echo -e "${MAGENTA}--- Configurar Dominio de Cloudflare ---${NC}"
             echo -e " Ingresa tu subdominio/dominio apuntado previamente hacia la IP ${YELLOW}$IP_PUB${NC} en Cloudflare."
-            echo -e " Ejemplo: ${CYAN}vpn.tudominio.com${NC}"
-            echo ""
             read -rp " Dominio / Hostname: " new_dom
             if [ -n "$new_dom" ]; then
                 echo "$new_dom" > /etc/golbert_domain.conf
-                
-                # Regenerar certificado SSL Stunnel para el dominio
                 openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 -sha256 \
                     -subj "/C=US/ST=State/L=City/O=GolbertVPN/CN=$new_dom" \
                     -keyout /etc/stunnel/stunnel.pem -out /etc/stunnel/stunnel.pem >/dev/null 2>&1
-                
                 systemctl restart stunnel4 2>/dev/null || true
                 echo -e "${GREEN}✓ Dominio registrado exitosamente y certificado SSL actualizado.${NC}"
             fi
