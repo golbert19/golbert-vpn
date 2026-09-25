@@ -15,7 +15,7 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Asegurar que /bin/nologin esté en /etc/shells
+# Asegurar /bin/nologin en /etc/shells
 if ! grep -q "^/bin/nologin$" /etc/shells; then
     echo "/bin/nologin" >> /etc/shells
 fi
@@ -49,7 +49,7 @@ sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear 2>/dev/null || true
 sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear 2>/dev/null || true
 sed -i 's/DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-p 109"/' /etc/default/dropbear 2>/dev/null || true
 
-# 4. Proxy Python WS
+# 4. Proxy Python WS Adaptativo
 echo -e "${GREEN}[4/7] Creando Servicio HTTP/WS Proxy...${NC}"
 cat > /usr/local/bin/ws-proxy.py <<'PROXY_EOF'
 import socket
@@ -73,7 +73,11 @@ def handler(client_socket, address):
 
         target_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         target_socket.connect((TARGET_HOST, TARGET_PORT))
-        client_socket.sendall(RESPONSE_101)
+
+        if b'HTTP/' in request or b'GET' in request or b'POST' in request or b'CONNECT' in request:
+            client_socket.sendall(RESPONSE_101)
+        else:
+            target_socket.sendall(request)
 
         sockets = [client_socket, target_socket]
         while True:
@@ -134,8 +138,8 @@ Restart=always
 WantedBy=multi-user.target
 WSPROXY_EOF
 
-# 5. Stunnel4
-echo -e "${GREEN}[5/7] Configurando Stunnel4 (Puerto 443)...${NC}"
+# 5. Configurar Stunnel4 (SSL Puerto 443 -> Proxy WS Puerto 80)
+echo -e "${GREEN}[5/7] Configurando Stunnel4 (SSL/TLS en Puerto 443)...${NC}"
 mkdir -p /etc/stunnel
 openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 -sha256 \
     -subj "/C=US/ST=State/L=City/O=GolbertVPN/CN=golbert.vpn" \
@@ -147,7 +151,7 @@ client = no
 socket = l:TCP_NODELAY=1
 socket = r:TCP_NODELAY=1
 
-[ws-ssl]
+[ssl-ws-proxy]
 accept = 443
 connect = 127.0.0.1:80
 STUNNEL_EOF
@@ -193,6 +197,7 @@ BADVPN_EOF
 # 7. Limites, Limpieza y Menú Avanzado
 echo -e "${GREEN}[7/7] Configurando Limitador, Limpieza y Menú...${NC}"
 touch /etc/golbert_limits.conf
+touch /etc/golbert_domain.conf
 
 cat > /usr/local/bin/limiter.sh <<'LIMITER_EOF'
 #!/bin/bash
@@ -264,7 +269,7 @@ chmod +x /usr/local/bin/expcleaner.sh
 
 (crontab -l 2>/dev/null | grep -v "/usr/local/bin/expcleaner.sh"; echo "0 */6 * * * /bin/bash /usr/local/bin/expcleaner.sh") | crontab - 2>/dev/null || true
 
-# Script del Menú Colorido y Completo
+# Script del Menú Colorido
 cat > /usr/local/bin/menu <<'MENU_EOF'
 #!/bin/bash
 
@@ -295,7 +300,9 @@ while true; do
     OS_INFO=$(lsb_release -ds 2>/dev/null || cat /etc/issue | head -n1 | xargs || echo "Linux")
     UPTIME_INFO=$(uptime -p | sed 's/up //')
     IP_PUB=$(curl -s --max-time 2 https://api.ipify.org || hostname -I | awk '{print $1}')
-    
+    DOMAIN=$(cat /etc/golbert_domain.conf 2>/dev/null || echo "Sin dominio")
+    [ -z "$DOMAIN" ] && DOMAIN="Sin dominio"
+
     DISK_TOTAL=$(df -h / | awk 'NR==2 {print $2}')
     DISK_USED=$(df -h / | awk 'NR==2 {print $3}')
     DISK_FREE=$(df -h / | awk 'NR==2 {print $4}')
@@ -316,7 +323,8 @@ while true; do
     echo -e "${RED}───────────────────────────────────────────────────────────────${NC}"
     echo -e " ${CYAN}OS      :${NC} ${WHITE}$OS_INFO${NC}"
     echo -e " ${CYAN}UPTIME  :${NC} ${WHITE}$UPTIME_INFO${NC}"
-    echo -e " ${CYAN}IP/DOM  :${NC} ${WHITE}$IP_PUB${NC}"
+    echo -e " ${CYAN}IP PUB  :${NC} ${WHITE}$IP_PUB${NC}"
+    echo -e " ${CYAN}DOMINIO :${NC} ${YELLOW}$DOMAIN${NC}"
     echo -e " ${CYAN}ONLINE  :${NC} ${GREEN}${ONLINE_USERS} usuario(s) activo(s)${NC}"
     echo -e " ${CYAN}DISCO   :${NC} Total ${WHITE}${DISK_TOTAL}${NC}     Uso ${WHITE}${DISK_USED}${NC}     Libre ${WHITE}${DISK_FREE}${NC}"
     echo -e " ${CYAN}CPU     :${NC} ${BLUE}${CPU_BAR}${NC} ${YELLOW}${CPU_USAGE}.0%${NC}   Cores: ${WHITE}$CPU_CORES${NC}"
@@ -325,10 +333,12 @@ while true; do
     echo -e "             ${MAGENTA}PANEL DE CONTROL GOLBERT VPN${NC}"
     echo -e "${RED}───────────────────────────────────────────────────────────────${NC}"
     echo -e " ${GREEN}[1]${NC} Crear usuario SSH/VPN"
-    echo -e " ${GREEN}[2]${NC} Eliminar usuario"
-    echo -e " ${GREEN}[3]${NC} Ver usuarios activos en detalle"
-    echo -e " ${GREEN}[4]${NC} Cambiar / Configurar Banner"
-    echo -e " ${GREEN}[5]${NC} Estado de los servicios"
+    echo -e " ${GREEN}[2]${NC} Editar usuario / Renovar vencimiento"
+    echo -e " ${GREEN}[3]${NC} Eliminar usuario"
+    echo -e " ${GREEN}[4]${NC} Ver usuarios activos en detalle"
+    echo -e " ${GREEN}[5]${NC} Configurar Dominio / Hostname (Cloudflare)"
+    echo -e " ${GREEN}[6]${NC} Cambiar / Configurar Banner"
+    echo -e " ${GREEN}[7]${NC} Estado de los servicios"
     echo -e " ${GREEN}[0]${NC} Salir"
     echo -e "${RED}───────────────────────────────────────────────────────────────${NC}"
     read -rp " Seleccione una opción: " opt
@@ -339,15 +349,78 @@ while true; do
             read -rp " Nombre de usuario: " u
             read -rp " Contraseña: " p
             read -rp " Días de duración: " d
+            read -rp " Límite de conexiones simultáneas (Default 2): " lim
+            [ -z "$lim" ] && lim=2
+
             useradd -M -s /bin/nologin "$u" 2>/dev/null || true
             echo "$u:$p" | chpasswd
             exp=$(date -d "+$d days" +%Y-%m-%d)
             chage -E "$exp" "$u"
+            echo "$u=$lim" >> /etc/golbert_limits.conf
+
+            HOST_DISP="$IP_PUB"
+            [ "$DOMAIN" != "Sin dominio" ] && HOST_DISP="$DOMAIN"
+
             echo ""
-            echo -e "${GREEN}✓ Usuario $u creado exitosamente hasta $exp${NC}"
+            echo -e "${GREEN}=====================================================${NC}"
+            echo -e "${GREEN}          USUARIO CREADO EXITOSAMENTE                ${NC}"
+            echo -e "${GREEN}=====================================================${NC}"
+            echo -e " ${CYAN}Host / IP          :${NC} ${WHITE}$HOST_DISP${NC}"
+            echo -e " ${CYAN}Usuario            :${NC} ${WHITE}$u${NC}"
+            echo -e " ${CYAN}Contraseña         :${NC} ${WHITE}$p${NC}"
+            echo -e " ${CYAN}Vencimiento        :${NC} ${YELLOW}$exp ($d días)${NC}"
+            echo -e " ${CYAN}Límite conexiones  :${NC} ${WHITE}$lim${NC}"
+            echo -e "${GREEN}-----------------------------------------------------${NC}"
+            echo -e " ${MAGENTA}PUERTOS DISPONIBLES EN EL SERVIDOR:${NC}"
+            echo -e " ${CYAN}• SSL / TLS Proxy  :${NC} ${GREEN}443${NC}"
+            echo -e " ${CYAN}• HTTP WS / Proxy  :${NC} ${GREEN}80, 8080${NC}"
+            echo -e " ${CYAN}• Dropbear Directo :${NC} ${GREEN}109${NC}"
+            echo -e " ${CYAN}• SSH Directo      :${NC} ${GREEN}22${NC}"
+            echo -e " ${CYAN}• BadVPN UDPGW     :${NC} ${GREEN}7300${NC}"
+            echo -e "${GREEN}=====================================================${NC}"
             read -rp " Presione Enter para continuar..."
             ;;
         2)
+            echo ""
+            echo -e "${CYAN}--- Editar Usuario / Cambiar Expiración ---${NC}"
+            read -rp " Ingrese el nombre de usuario a editar: " u
+            if id "$u" &>/dev/null; then
+                curr_exp=$(chage -l "$u" | grep "Account expires" | cut -d: -f2 | xargs)
+                curr_lim=$(grep -w "^$u" /etc/golbert_limits.conf | cut -d'=' -f2 || echo "2")
+                echo -e " Expiración actual: ${YELLOW}$curr_exp${NC}"
+                echo -e " Límite actual de conexiones: ${YELLOW}$curr_lim${NC}"
+                echo ""
+                echo -e " [1] Cambiar Contraseña"
+                echo -e " [2] Agregar/Renovar Días de Vencimiento"
+                echo -e " [3] Cambiar Límite de Conexiones"
+                read -rp " Seleccione una opción: " ed_opt
+
+                case $ed_opt in
+                    1)
+                        read -rp " Nueva Contraseña: " new_p
+                        echo "$u:$new_p" | chpasswd
+                        echo -e "${GREEN}✓ Contraseña actualizada correctamente.${NC}"
+                        ;;
+                    2)
+                        read -rp " Días adicionales a sumar desde hoy: " add_d
+                        new_exp=$(date -d "+$add_d days" +%Y-%m-%d)
+                        chage -E "$new_exp" "$u"
+                        echo -e "${GREEN}✓ Nueva fecha de vencimiento: $new_exp${NC}"
+                        ;;
+                    3)
+                        read -rp " Nuevo límite de conexiones: " new_lim
+                        sed -i "/^$u=/d" /etc/golbert_limits.conf
+                        echo "$u=$new_lim" >> /etc/golbert_limits.conf
+                        echo -e "${GREEN}✓ Límite actualizado a $new_lim conexiones.${NC}"
+                        ;;
+                    *) echo -e "${RED}Opción inválida.${NC}" ;;
+                esac
+            else
+                echo -e "${RED}El usuario no existe.${NC}"
+            fi
+            read -rp " Presione Enter para continuar..."
+            ;;
+        3)
             echo ""
             read -rp " Usuario a eliminar: " u
             pkill -u "$u" 2>/dev/null || true
@@ -356,14 +429,34 @@ while true; do
             echo -e "${YELLOW}✓ Usuario $u eliminado.${NC}"
             read -rp " Presione Enter para continuar..."
             ;;
-        3)
+        4)
             echo ""
             echo -e "${CYAN}────────────── USUARIOS CONECTADOS ONLINE ──────────────${NC}"
             ps aux | grep -E 'dropbear|sshd' | grep -v grep | grep -v root | awk '{print "Usuario: "$1" | PID: "$2}'
             echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
             read -rp " Presione Enter para continuar..."
             ;;
-        4)
+        5)
+            echo ""
+            echo -e "${MAGENTA}--- Configurar Dominio de Cloudflare ---${NC}"
+            echo -e " Ingresa tu subdominio/dominio apuntado previamente hacia la IP ${YELLOW}$IP_PUB${NC} en Cloudflare."
+            echo -e " Ejemplo: ${CYAN}vpn.tudominio.com${NC}"
+            echo ""
+            read -rp " Dominio / Hostname: " new_dom
+            if [ -n "$new_dom" ]; then
+                echo "$new_dom" > /etc/golbert_domain.conf
+                
+                # Regenerar certificado SSL Stunnel para el dominio
+                openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 -sha256 \
+                    -subj "/C=US/ST=State/L=City/O=GolbertVPN/CN=$new_dom" \
+                    -keyout /etc/stunnel/stunnel.pem -out /etc/stunnel/stunnel.pem >/dev/null 2>&1
+                
+                systemctl restart stunnel4 2>/dev/null || true
+                echo -e "${GREEN}✓ Dominio registrado exitosamente y certificado SSL actualizado.${NC}"
+            fi
+            read -rp " Presione Enter para continuar..."
+            ;;
+        6)
             echo ""
             echo -e "${MAGENTA}--- Configuración de Banner (/etc/issue.net) ---${NC}"
             echo -e "Banner actual:"
@@ -379,7 +472,7 @@ while true; do
             fi
             read -rp " Presione Enter para continuar..."
             ;;
-        5)
+        7)
             echo ""
             echo -e "${CYAN}────────────── ESTADO DE SERVICIOS ──────────────${NC}"
             systemctl status ws-proxy stunnel4 badvpn dropbear --no-pager
