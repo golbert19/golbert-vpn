@@ -21,15 +21,13 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -y && apt-get upgrade -y
 apt-get install -y curl wget net-tools ufw dropbear stunnel4 python3 cmake gcc build-essential nano cron
 
-# 2. Configurar Banner /etc/issue.net
+# 2. Configurar Banner /etc/issue.net (Texto plano formateado)
 echo -e "${GREEN}[2/7] Configurando Banner por defecto...${NC}"
 cat > /etc/issue.net <<'BANNER_EOF'
-<p style="text-align:center;">
-<font color="green"><b>=================================</b></font><br>
-<font color="blue"><b>       BIENVENIDO A GOLBERT VPN   </b></font><br>
-<font color="red"><b>  PROHIBIDO SPAM / TORRENT / DDOS </b></font><br>
-<font color="green"><b>=================================</b></font>
-</p>
+=================================
+       BIENVENIDO A GOLBERT VPN   
+  PROHIBIDO SPAM / TORRENT / DDOS 
+=================================
 BANNER_EOF
 
 sed -i 's|^DROPBEAR_BANNER=.*|DROPBEAR_BANNER="/etc/issue.net"|' /etc/default/dropbear 2>/dev/null || echo 'DROPBEAR_BANNER="/etc/issue.net"' >> /etc/default/dropbear
@@ -41,12 +39,13 @@ echo -e "${GREEN}[3/7] Configurando Dropbear (Puerto 109)...${NC}"
 sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear
 sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear
 
-# 4. Script Python WS Proxy
+# 4. Script Python WS Proxy (Corregido alto consumo de CPU)
 echo -e "${GREEN}[4/7] Creando Servicio HTTP/WS Proxy...${NC}"
 cat > /usr/local/bin/ws-proxy.py <<'PROXY_EOF'
 import socket
 import select
-import _thread
+import threading
+import time
 
 LISTENING_PORTS = [80, 8080]
 TARGET_HOST = '127.0.0.1'
@@ -55,6 +54,7 @@ BUFLEN = 8192
 RESPONSE_101 = b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'
 
 def handler(client_socket, address):
+    target_socket = None
     try:
         request = client_socket.recv(BUFLEN)
         if not request:
@@ -82,10 +82,11 @@ def handler(client_socket, address):
         pass
     finally:
         client_socket.close()
-        try:
-            target_socket.close()
-        except Exception:
-            pass
+        if target_socket:
+            try:
+                target_socket.close()
+            except Exception:
+                pass
 
 def server_thread(port):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -95,15 +96,19 @@ def server_thread(port):
     while True:
         try:
             client, addr = server.accept()
-            _thread.start_new_thread(handler, (client, addr))
+            t = threading.Thread(target=handler, args=(client, addr))
+            t.daemon = True
+            t.start()
         except Exception:
             pass
 
 if __name__ == '__main__':
     for port in LISTENING_PORTS:
-        _thread.start_new_thread(server_thread, (port,))
+        t = threading.Thread(target=server_thread, args=(port,))
+        t.daemon = True
+        t.start()
     while True:
-        pass
+        time.sleep(3600)
 PROXY_EOF
 
 cat > /etc/systemd/system/ws-proxy.service <<'WSPROXY_EOF'
@@ -154,10 +159,9 @@ STUNNEL_SERVICE_EOF
 
 # 6. Instalar BadVPN (UDPGW) en Puerto 7300
 echo -e "${GREEN}[6/7] Compilando e Instalando BadVPN UDPGW...${NC}"
-wget -q -O /tmp/badvpn.tar.gz https://github.com/ambrop72/badvpn/archive/refs/tags/1.999.130.tar.gz || true
-if [ -f /tmp/badvpn.tar.gz ]; then
+if wget -q -O /tmp/badvpn.tar.gz https://github.com/ambrop72/badvpn/archive/refs/tags/1.999.130.tar.gz; then
     cd /tmp && tar -xf badvpn.tar.gz && cd badvpn-1.999.130
-    mkdir build && cd build
+    mkdir -p build && cd build
     cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1 >/dev/null
     make install >/dev/null
     cd / && rm -rf /tmp/badvpn*
@@ -248,9 +252,9 @@ truncate -s 0 /var/log/auth.log 2>/dev/null || true
 EXPCLEAN_EOF
 chmod +x /usr/local/bin/expcleaner.sh
 
-(crontab -l 2>/dev/null | grep -v "/usr/local/bin/expcleaner.sh" ; echo "0 */6 * * * /bin/bash /usr/local/bin/expcleaner.sh") | crontab -
+# Manejo seguro del crontab sin fallar por set -e
+(crontab -l 2>/dev/null || true) | grep -v "/usr/local/bin/expcleaner.sh" | { cat; echo "0 */6 * * * /bin/bash /usr/local/bin/expcleaner.sh"; } | crontab -
 
-# Intentar descargar menú o generar uno local si falla la descarga (solución al error 404)
 echo -e "${GREEN}Configurando Panel del Menú...${NC}"
 if ! wget -q -O /usr/local/bin/menu.sh https://raw.githubusercontent.com/golbert19/golbert-vpn/main/menu.sh || [ ! -s /usr/local/bin/menu.sh ]; then
     cat > /usr/local/bin/menu.sh <<'MENU_EOF'
