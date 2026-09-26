@@ -7,6 +7,8 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+WHITE='\033[1;37m'
 NC='\033[0m'
 
 LIMIT_FILE="/etc/golbert_limits.conf"
@@ -26,6 +28,8 @@ get_ip() {
 get_domain() {
     if [ -f /etc/stunnel/domain.txt ]; then
         cat /etc/stunnel/domain.txt
+    elif [ -f /etc/golbert_domain.conf ]; then
+        cat /etc/golbert_domain.conf
     else
         echo "Sin Dominio / Cloudflare"
     fi
@@ -55,7 +59,7 @@ get_user_limit() {
     local usr="$1"
     local lim
     lim=$(grep -w "^$usr" "$LIMIT_FILE" 2>/dev/null | cut -d'=' -f2 || true)
-    echo "${lim:-1}"
+    echo "${lim:-2}"
 }
 
 get_port_dropbear() {
@@ -101,7 +105,7 @@ crear_usuario() {
     read -rp "Límite Multi-Login (ej: 1 o 2): " max_conn
 
     if ! [[ "$max_conn" =~ ^[0-9]+$ ]]; then
-        max_conn=1
+        max_conn=2
     fi
 
     if ! [[ "$days" =~ ^[0-9]+$ ]]; then
@@ -121,7 +125,7 @@ crear_usuario() {
     echo "Dominio CF:  $(get_domain)"
     echo "Usuario:     $username"
     echo "Password:    $password"
-    echo "Expiración:  $exp_date"
+    echo "Expiración:  $exp_date ($days días)"
     echo "Límite:      $max_conn dispositivo(s)"
     echo "Puerto SSL:  $(get_port_stunnel)"
     echo "Puerto Drop: $(get_port_dropbear)"
@@ -151,7 +155,7 @@ ver_conectados() {
     echo -e "\n${BLUE}=== USUARIOS CONECTADOS EN TIEMPO REAL ===${NC}"
     printf "%-15s %-10s %-20s\n" "USUARIO" "PID" "DESDE"
     echo "------------------------------------------------"
-    ps aux 2>/dev/null | grep -E 'dropbear|sshd' | grep -v grep | grep -v root | awk '{print $1, $2, $9}' | while read -r usr pid time; do
+    ps aux 2>/dev/null | grep -E 'dropbear|sshd' | grep -v grep | grep -v root | awk '{print $1, $2, $9}' | while read -r usr pid time || [ -n "$usr" ]; do
         if [ -n "$usr" ]; then
             printf "%-15s %-10s %-20s\n" "$usr" "$pid" "$time"
         fi
@@ -163,15 +167,77 @@ ver_conectados() {
 
 listar_usuarios() {
     echo -e "\n${BLUE}=== LISTA DE USUARIOS REGISTRADOS ===${NC}"
-    printf "%-18s %-15s %-10s\n" "USUARIO" "EXPIRACIÓN" "LÍMITE"
-    echo "---------------------------------------------------"
-    while FS=':' read -r user _ uid _ _ _ _; do
+    printf "%-16s %-14s %-8s %-10s\n" "USUARIO" "EXPIRACIÓN" "LÍMITE" "ESTADO"
+    echo "---------------------------------------------------------"
+    hoy_sec=$(date +%s)
+    
+    while FS=':' read -r user _ uid _ _ _ _ || [ -n "$user" ]; do
         if [ "$uid" -ge 1000 ] && [ "$user" != "nobody" ]; then
-            exp=$(chage -l "$user" 2>/dev/null | grep "Account expires" | cut -d: -f2 | xargs || echo "N/A")
+            exp=$(chage -l "$user" 2>/dev/null | grep "Account expires" | cut -d: -f2 | xargs || true)
+            [ -z "$exp" ] && exp="Sin limite"
+            
             lim=$(get_user_limit "$user")
-            printf "%-18s %-15s %-10s\n" "$user" "${exp:-Sin limite}" "$lim"
+            
+            status_color="${GREEN}Activo${NC}"
+            if [ "$exp" != "never" ] && [ "$exp" != "Sin limite" ] && [ -n "$exp" ]; then
+                exp_sec=$(date -d "$exp" +%s 2>/dev/null || echo 0)
+                if [ "$exp_sec" -gt 0 ] && [ "$exp_sec" -lt "$hoy_sec" ]; then
+                    status_color="${RED}Vencido${NC}"
+                fi
+            fi
+
+            printf "%-16s %-14s %-8s " "$user" "$exp" "$lim"
+            echo -e "$status_color"
         fi
     done < /etc/passwd
+    echo "---------------------------------------------------------"
+    read -rp "Presione Enter para continuar..." _
+}
+
+ver_detalle_usuario() {
+    echo -e "\n${BLUE}=== DETALLE DE USUARIO ===${NC}"
+    read -rp "Ingrese el nombre de usuario a consultar: " username
+    if [ -z "$username" ]; then return; fi
+
+    if ! id "$username" &>/dev/null; then
+        echo -e "${RED}El usuario '$username' no existe.${NC}"
+        read -rp "Presione Enter para continuar..." _
+        return
+    fi
+
+    exp_date=$(chage -l "$username" 2>/dev/null | grep "Account expires" | cut -d: -f2 | xargs || true)
+    [ -z "$exp_date" ] && exp_date="never"
+    
+    lim=$(get_user_limit "$username")
+    
+    conn_count=$(ps aux 2>/dev/null | grep -E 'dropbear|sshd' | grep -v grep | grep -w "^$username" | wc -l)
+    
+    dias_restantes="N/A"
+    estado="${GREEN}ACTIVO${NC}"
+    if [ "$exp_date" != "never" ]; then
+        exp_sec=$(date -d "$exp_date" +%s 2>/dev/null || echo 0)
+        hoy_sec=$(date +%s)
+        if [ "$exp_sec" -gt 0 ]; then
+            diff_sec=$((exp_sec - hoy_sec))
+            if [ "$diff_sec" -le 0 ]; then
+                dias_restantes="0 (Caducado)"
+                estado="${RED}VENCIDO${NC}"
+            else
+                dias_restantes="$((diff_sec / 86400)) día(s)"
+            fi
+        fi
+    else
+        dias_restantes="Ilimitado"
+    fi
+
+    echo -e "\n${CYAN}---------------------------------${NC}"
+    echo -e " Usuario           : ${WHITE}$username${NC}"
+    echo -e " Estado Cuenta     : $estado"
+    echo -e " Fecha Expiración  : ${YELLOW}$exp_date${NC}"
+    echo -e " Días Restantes    : ${YELLOW}$dias_restantes${NC}"
+    echo -e " Límite Multi-login: ${WHITE}$lim dispositivo(s)${NC}"
+    echo -e " Conexiones Activas: ${GREEN}$conn_count / $lim${NC}"
+    echo -e "${CYAN}---------------------------------${NC}"
     read -rp "Presione Enter para continuar..." _
 }
 
@@ -181,6 +247,7 @@ configurar_dominio() {
     if [ -n "$nuevo_dominio" ]; then
         mkdir -p /etc/stunnel
         echo "$nuevo_dominio" > /etc/stunnel/domain.txt
+        echo "$nuevo_dominio" > /etc/golbert_domain.conf 2>/dev/null || true
         echo -e "${GREEN}[OK] Dominio guardado correctamente.${NC}"
     fi
     read -rp "Presione Enter para continuar..." _
@@ -292,7 +359,7 @@ eliminar_expirados() {
     hoy_sec=$(date +%s)
     eliminados=0
 
-    while FS=':' read -r user _ uid _ _ _ _; do
+    while FS=':' read -r user _ uid _ _ _ _ || [ -n "$user" ]; do
         if [ "$uid" -ge 1000 ] && [ "$user" != "nobody" ]; then
             exp_date=$(chage -l "$user" 2>/dev/null | grep "Account expires" | cut -d: -f2 | xargs || true)
             if [ -n "$exp_date" ] && [ "$exp_date" != "never" ]; then
@@ -365,31 +432,33 @@ while true; do
     echo " 2) Eliminar usuario"
     echo " 3) Ver usuarios conectados (Online)"
     echo " 4) Listar todos los usuarios y vencimiento"
-    echo " 5) Registrar/Modificar Dominio Cloudflare"
-    echo " 6) Ver estado de servicios"
-    echo " 7) Reiniciar servicios"
-    echo " 8) Cambiar puertos de conexión"
-    echo " 9) Configurar Límite Multi-Login"
-    echo " 10) Editar Banner de conexión"
-    echo " 11) Eliminar usuarios caducados ahora"
-    echo " 12) Limpiar Logs y Liberar RAM"
+    echo " 5) Consultar detalle específico de un usuario"
+    echo " 6) Registrar/Modificar Dominio Cloudflare"
+    echo " 7) Ver estado de servicios"
+    echo " 8) Reiniciar servicios"
+    echo " 9) Cambiar puertos de conexión"
+    echo " 10) Configurar Límite Multi-Login"
+    echo " 11) Editar Banner de conexión"
+    echo " 12) Eliminar usuarios caducados ahora"
+    echo " 13) Limpiar Logs y Liberar RAM"
     echo " 0) Salir"
     echo -e "${YELLOW}=====================================================${NC}"
-    read -rp " Seleccione una opción [0-12]: " opcion
+    read -rp " Seleccione una opción [0-13]: " opcion
 
     case $opcion in
         1) crear_usuario ;;
         2) eliminar_usuario ;;
         3) ver_conectados ;;
         4) listar_usuarios ;;
-        5) configurar_dominio ;;
-        6) estado_servicios ;;
-        7) reiniciar_servicios ;;
-        8) cambiar_puertos ;;
-        9) cambiar_limite_usuario ;;
-        10) configurar_banner ;;
-        11) eliminar_expirados ;;
-        12) limpiar_sistema ;;
+        5) ver_detalle_usuario ;;
+        6) configurar_dominio ;;
+        7) estado_servicios ;;
+        8) reiniciar_servicios ;;
+        9) cambiar_puertos ;;
+        10) cambiar_limite_usuario ;;
+        11) configurar_banner ;;
+        12) eliminar_expirados ;;
+        13) limpiar_sistema ;;
         0) echo -e "${GREEN}¡Hasta luego!${NC}"; exit 0 ;;
         *) echo -e "${RED}Opción inválida.${NC}"; sleep 1 ;;
     esac
