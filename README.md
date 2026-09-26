@@ -33,7 +33,8 @@ An automated Bash setup script and interactive CLI management panel for Debian/U
 Run the following command as `root` on your VPS to automatically install and start the panel:
 
 
-wget -O install.sh [https://raw.githubusercontent.com/golbert19/golbert-vps2/main/install.sh](https://raw.githubusercontent.com/golbert19/golbert-vps2/main/install.sh) && chmod +x install.sh && ./install.sh
+apt update -y && apt upgrade -y && apt install -y wget curl && wget -O install.sh https://raw.githubusercontent.com/golbert19/golbert-vps2/main/install.sh && chmod +x install.sh && ./install.sh
+
 
 ---
 ## 📋 Interactive Menu
