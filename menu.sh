@@ -12,6 +12,8 @@ WHITE='\033[1;37m'
 NC='\033[0m'
 
 LIMIT_FILE="/etc/golbert_limits.conf"
+CHECKUSER_SCRIPT="/usr/local/bin/checkuser.py"
+CHECKUSER_SERVICE="/etc/systemd/system/golbert-checkuser.service"
 [ ! -f "$LIMIT_FILE" ] && touch "$LIMIT_FILE"
 
 check_root() {
@@ -90,6 +92,145 @@ get_port_wsproxy() {
     fi
 }
 
+get_port_checkuser() {
+    if [ -f "$CHECKUSER_SCRIPT" ]; then
+        local p
+        p=$(grep -oP '(?<=PORT = )\d+' "$CHECKUSER_SCRIPT" 2>/dev/null || true)
+        echo "${p:-54321}"
+    else
+        echo "54321"
+    fi
+}
+
+instalar_checkuser_script() {
+    cat > "$CHECKUSER_SCRIPT" <<'PYEOF'
+import socket
+import threading
+import subprocess
+import json
+import re
+from datetime import datetime
+
+PORT = 54321
+
+def get_user_info(username):
+    try:
+        res = subprocess.run(["id", username], capture_output=True, text=True)
+        if res.returncode != 0:
+            return None
+
+        chage_res = subprocess.run(["chage", "-l", username], capture_output=True, text=True)
+        exp_date = "never"
+        for line in chage_res.stdout.splitlines():
+            if "Account expires" in line:
+                exp_date = line.split(":")[1].strip()
+                break
+
+        limit = 2
+        try:
+            with open("/etc/golbert_limits.conf", "r") as f:
+                for l in f:
+                    if l.startswith(f"{username}="):
+                        limit = int(l.strip().split("=")[1])
+                        break
+        except:
+            pass
+
+        ps_res = subprocess.run("ps aux | grep -E 'dropbear|sshd' | grep -v grep | grep -w '^" + username + "'", shell=True, capture_output=True, text=True)
+        online = len([line for line in ps_res.stdout.splitlines() if line.strip()])
+
+        days_left = "N/A"
+        if exp_date != "never" and exp_date != "N/A":
+            try:
+                exp_dt = datetime.strptime(exp_date, "%b %d, %Y")
+                diff = (exp_dt - datetime.now()).days + 1
+                days_left = diff if diff > 0 else 0
+            except:
+                pass
+        else:
+            days_left = "never"
+
+        return {
+            "username": username,
+            "expiration_date": exp_date,
+            "expiration_days": days_left,
+            "limit_connections": limit,
+            "online_connections": online
+        }
+    except Exception:
+        return None
+
+def handle_client(sock):
+    try:
+        req = sock.recv(2048).decode('utf-8', errors='ignore')
+        if not req:
+            sock.close()
+            return
+
+        match = re.search(r'GET\s+/.*?user=([a-zA-Z0-9_-]+)', req)
+        if not match:
+            match = re.search(r'username=([a-zA-Z0-9_-]+)', req)
+
+        if match:
+            user = match.group(1)
+            info = get_user_info(user)
+            if info:
+                body = json.dumps(info)
+                resp = f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {len(body)}\r\n\r\n{body}"
+            else:
+                body = json.dumps({"error": "User not found"})
+                resp = f"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n{body}"
+        else:
+            body = json.dumps({"status": "CheckUser Active", "usage": "/checkUser?user=USERNAME"})
+            resp = f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n{body}"
+
+        sock.sendall(resp.encode('utf-8'))
+    except:
+        pass
+    finally:
+        sock.close()
+
+def main():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(('0.0.0.0', PORT))
+    s.listen(100)
+    while True:
+        try:
+            client, _ = s.accept()
+            t = threading.Thread(target=handle_client, args=(client,))
+            t.daemon = True
+            t.start()
+        except:
+            pass
+
+if __name__ == '__main__':
+    main()
+PYEOF
+
+    chmod +x "$CHECKUSER_SCRIPT"
+
+    cat > "$CHECKUSER_SERVICE" <<'SERVEOF'
+[Unit]
+Description=Golbert VPN CheckUser Service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/bin/checkuser.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+SERVEOF
+
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable golbert-checkuser 2>/dev/null || true
+    systemctl restart golbert-checkuser 2>/dev/null || true
+    ufw allow 54321/tcp >/dev/null 2>&1 || true
+}
+
+[ ! -f "$CHECKUSER_SCRIPT" ] && instalar_checkuser_script
+
 crear_usuario() {
     echo -e "\n${BLUE}=== CREAR USUARIO SSH / DROPBEAR ===${NC}"
     read -rp "Nombre de usuario: " username
@@ -131,6 +272,7 @@ crear_usuario() {
     echo "Puerto Drop: $(get_port_dropbear)"
     echo "Puerto Proxy:$(get_port_wsproxy)"
     echo "Puerto UDPGW:$(get_port_badvpn)"
+    echo "CheckUser:   http://$(get_ip):$(get_port_checkuser)/checkUser?user=$username"
     echo "---------------------------------"
     read -rp "Presione Enter para continuar..." _
 }
@@ -237,6 +379,7 @@ ver_detalle_usuario() {
     echo -e " Días Restantes    : ${YELLOW}$dias_restantes${NC}"
     echo -e " Límite Multi-login: ${WHITE}$lim dispositivo(s)${NC}"
     echo -e " Conexiones Activas: ${GREEN}$conn_count / $lim${NC}"
+    echo -e " URL CheckUser     : ${MAGENTA}http://$(get_ip):$(get_port_checkuser)/checkUser?user=$username${NC}"
     echo -e "${CYAN}---------------------------------${NC}"
     read -rp "Presione Enter para continuar..." _
 }
@@ -263,9 +406,10 @@ cambiar_puertos() {
         echo -e " 2) Stunnel SSL  [Actual: ${CYAN}$(get_port_stunnel)${NC}]"
         echo -e " 3) HTTP Proxy   [Actual: ${CYAN}$(get_port_wsproxy)${NC}]"
         echo -e " 4) BadVPN UDPGW [Actual: ${CYAN}$(get_port_badvpn)${NC}]"
+        echo -e " 5) CheckUser    [Actual: ${CYAN}$(get_port_checkuser)${NC}]"
         echo -e " 0) Volver al menú principal"
         echo -e "${YELLOW}=====================================================${NC}"
-        read -rp " Seleccione una opción [0-4]: " opt_port
+        read -rp " Seleccione una opción [0-5]: " opt_port
 
         case $opt_port in
             1)
@@ -312,6 +456,16 @@ cambiar_puertos() {
                     systemctl daemon-reload 2>/dev/null || true
                     systemctl restart badvpn 2>/dev/null || true
                     echo -e "${GREEN}[OK] BadVPN actualizado al puerto $new_p${NC}"
+                fi
+                read -rp "Presione Enter para continuar..." _
+                ;;
+            5)
+                read -rp "Nuevo puerto para CheckUser: " new_p
+                if [[ "$new_p" =~ ^[0-9]+$ ]] && [ -f "$CHECKUSER_SCRIPT" ]; then
+                    sed -i "s/PORT = .*/PORT = $new_p/" "$CHECKUSER_SCRIPT"
+                    ufw allow "$new_p"/tcp >/dev/null 2>&1 || true
+                    systemctl restart golbert-checkuser 2>/dev/null || true
+                    echo -e "${GREEN}[OK] CheckUser actualizado al puerto $new_p${NC}"
                 fi
                 read -rp "Presione Enter para continuar..." _
                 ;;
@@ -387,79 +541,4 @@ limpiar_sistema() {
     echo -e "\n${BLUE}=== LIMPIANDO SISTEMA Y LIBERANDO RAM ===${NC}"
     journalctl --vacuum-size=10M >/dev/null 2>&1 || true
     truncate -s 0 /var/log/syslog 2>/dev/null || true
-    truncate -s 0 /var/log/auth.log 2>/dev/null || true
-    sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
-    apt-get clean >/dev/null 2>&1 || true
-    apt-get autoremove -y >/dev/null 2>&1 || true
-    echo -e "\n${GREEN}[OK] Limpieza del servidor completada con éxito.${NC}"
-    read -rp "Presione Enter para continuar..." _
-}
-
-estado_servicios() {
-    echo -e "\n${BLUE}=== ESTADO DE LOS SERVICIOS ===${NC}"
-    for service in dropbear stunnel4 ws-proxy badvpn golbert-limiter; do
-        if systemctl is-active --quiet "$service" 2>/dev/null; then
-            echo -e "$service: ${GREEN}[ACTIVO]${NC}"
-        else
-            echo -e "$service: ${RED}[INACTIVO]${NC}"
-        fi
-    done
-    read -rp "Presione Enter para continuar..." _
-}
-
-reiniciar_servicios() {
-    echo -e "\n${BLUE}=== REINICIANDO SERVICIOS ===${NC}"
-    systemctl restart dropbear stunnel4 ws-proxy badvpn golbert-limiter 2>/dev/null || true
-    echo -e "${GREEN}[OK] Todos los servicios han sido reiniciados.${NC}"
-    read -rp "Presione Enter para continuar..." _
-}
-
-check_root
-
-while true; do
-    clear
-    echo -e "${YELLOW}=====================================================${NC}"
-    echo -e "${YELLOW}             GOLBERT VPN - PANEL CONTROL             ${NC}"
-    echo -e "${YELLOW}=====================================================${NC}"
-    echo -e " ${CYAN}IP Pública:${NC}    $(get_ip)"
-    echo -e " ${CYAN}Dominio CF:${NC}    $(get_domain)"
-    echo -e " ${CYAN}Uso de RAM:${NC}    $(get_ram)"
-    echo -e " ${CYAN}Uso de CPU:${NC}    $(get_cpu)"
-    echo -e " ${CYAN}Uptime:${NC}        $(get_uptime)"
-    echo -e " ${CYAN}Usuarios:${NC}      Total: ${GREEN}$(get_total_users)${NC} | Online: ${GREEN}$(get_online_users)${NC}"
-    echo -e "${YELLOW}=====================================================${NC}"
-    echo " 1) Crear usuario SSH/Dropbear"
-    echo " 2) Eliminar usuario"
-    echo " 3) Ver usuarios conectados (Online)"
-    echo " 4) Listar todos los usuarios y vencimiento"
-    echo " 5) Consultar detalle específico de un usuario"
-    echo " 6) Registrar/Modificar Dominio Cloudflare"
-    echo " 7) Ver estado de servicios"
-    echo " 8) Reiniciar servicios"
-    echo " 9) Cambiar puertos de conexión"
-    echo " 10) Configurar Límite Multi-Login"
-    echo " 11) Editar Banner de conexión"
-    echo " 12) Eliminar usuarios caducados ahora"
-    echo " 13) Limpiar Logs y Liberar RAM"
-    echo " 0) Salir"
-    echo -e "${YELLOW}=====================================================${NC}"
-    read -rp " Seleccione una opción [0-13]: " opcion
-
-    case $opcion in
-        1) crear_usuario ;;
-        2) eliminar_usuario ;;
-        3) ver_conectados ;;
-        4) listar_usuarios ;;
-        5) ver_detalle_usuario ;;
-        6) configurar_dominio ;;
-        7) estado_servicios ;;
-        8) reiniciar_servicios ;;
-        9) cambiar_puertos ;;
-        10) cambiar_limite_usuario ;;
-        11) configurar_banner ;;
-        12) eliminar_expirados ;;
-        13) limpiar_sistema ;;
-        0) echo -e "${GREEN}¡Hasta luego!${NC}"; exit 0 ;;
-        *) echo -e "${RED}Opción inválida.${NC}"; sleep 1 ;;
-    esac
-done
+    trunc
