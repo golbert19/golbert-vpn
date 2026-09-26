@@ -1,50 +1,92 @@
-# 🚀 Golbert VPN - Script de Instalación Automática y Panel SSH/VPN
+# 🚀 Golbert VPN & VPS Management Panel
 
-Un script automatizado e interactivo para desplegar y administrar un servidor SSH / WS / SSL / UDPGW en distribuciones basadas en Debian y Ubuntu. Diseñado para gestionar clientes, puertos, dominios y seguridad en un solo lugar.
-
----
-
-## 💻 Requisitos del Sistema
-
-* **Sistema Operativo:** Debian 10 / 11 / 12 o Ubuntu 20.04 / 22.04 / 24.04 LTS.
-* **Arquitectura:** x86_64 / ARM64.
-* **Permisos:** Acceso directo como usuario `root`.
-* **Dominio:** Recomendado para SSL y Cloudflare (opcional).
+An automated Bash setup script and interactive CLI management panel for Debian/Ubuntu VPS instances. Designed for managing multi-protocol tunneling including SSH/Dropbear, SSL/TLS proxies, HTTP/WebSocket payloads, BadVPN UDPGW, and multi-login connection limits.
 
 ---
 
-## ✨ Características
+## 📌 Key Features
 
-* Gestión de usuarios SSH con fecha de vencimiento y límite de conexiones.
-* Proxy WebSocket Universal (Puertos 80 y 8080 compatible con Cloudflare).
-* Conexión SSL / TLS segura (Puerto 443 vía Stunnel).
-* Servicio API CheckUser integrado en puerto 54321 (compatible con HTTP Custom, Injector, ePro).
-* UDPGW (BadVPN) para optimizar llamadas y juegos (Puerto 7300).
-* Panel de control interactivo por consola (`menu`).
-* Limpiador automático de cuentas vencidas y limitador anti multi-login.
+- 👤 **SSH & Dropbear User Management:** Simple options to create, edit, extend expiration dates, and delete users.
+- 🔒 **Multi-Login Limiter:** Embedded background daemon (`golbert-limiter.service`) enforcing maximum simultaneous connection counts.
+- 🌐 **Multi-Protocol Proxying:** Integrated Python HTTP/WebSocket proxy handling custom payloads across multiple listening ports (`80`, `8080`, `8880`).
+- 🔐 **SSL/TLS Tunneling:** Automatic `stunnel4` wrapper bound to port `443` supporting Cloudflare domains and custom SSL certificates.
+- 🎮 **BadVPN UDPGW:** Dual UDP gateway instances on ports `7300` and `8180` (HCR) for low-latency UDP application and gaming support.
+- 🧹 **Automated Housekeeping:** Automated Cron task (`expcleaner.sh`) running every 6 hours to purge expired accounts and clean up system/journal logs.
+- 📊 **Resource Dashboard:** Real-time visual monitoring displaying CPU load, RAM usage, storage availability, server uptime, and active online users.
 
 ---
 
-## ⚡ Instalación Rápida
+## 🛠️ Service Architecture & Default Ports
 
-Ejecuta el siguiente comando en tu terminal con acceso `root`:
+| Service | Protocol | Default Ports | Target / Description |
+| :--- | :--- | :--- | :--- |
+| **SSH Direct** | TCP | `22` | Native Linux SSH access |
+| **Dropbear** | TCP | `109` | Lightweight SSH server |
+| **HTTP / WS Proxy** | TCP | `80`, `8080`, `8880` | Python Proxy (`ws-proxy.py`) -> `127.0.0.1:109` |
+| **SSL / TLS Proxy** | TCP | `443` | Stunnel4 -> `127.0.0.1:80` |
+| **BadVPN UDPGW** | UDP | `7300` | Standard UDP Gateway Service |
+| **BadVPN HCR** | UDP | `8180` | UDP HCR Service |
 
-```bash
-apt update -y && apt upgrade -y && apt install -y wget && wget [https://raw.githubusercontent.com/golbert19/golbert-vpn/main/install.sh](https://raw.githubusercontent.com/golbert19/golbert-vpn/main/install.sh) && chmod +x install.sh && ./install.sh
+---
+## 📥 Fast Installation
+
+Run the following command as `root` on your VPS to automatically install and start the panel:
 
 
-```
+wget -O install.sh [https://raw.githubusercontent.com/golbert19/golbert-vps2/main/install.sh](https://raw.githubusercontent.com/golbert19/golbert-vps2/main/install.sh) && chmod +x install.sh && ./install.sh
 
-## 🔧 Puertos por Defecto
+---
+## 📋 Interactive Menu
 
-| Servicio | Puerto |
-| :--- | :--- |
-| SSH | 22 |
-| Dropbear | 2222 |
-| WebSocket | 80 |
-| WebSocket SSL | 443 |
-| Squid | 8080 / 3128 |
-| UDPGW | 7300 |
-CheckUser API | 54321 | Consulta de expiración y estado para apps clientes
+# 🚀 Golbert VPN Control Panel
 
-> **Nota Cloudflare:** Para que funcione con subdominio en Cloudflare, activa la nube naranja y usa el puerto 80 (ws) y 443 (wss). Dominios como `ws.tudominio.com` apuntando a la IP del VPS.
+A lightweight, terminal-based management panel for Linux VPS instances (Debian/Ubuntu). It provides a real-time system monitoring interface and simplified administration for SSH/VPN tunneling services, user management, custom domains, and banner configurations.
+
+---
+
+## 📌 Dashboard Features
+
+- 📊 **Real-time System Monitoring:** Displays OS details, system uptime, public IP, configured domain/hostname, disk usage, active CPU load, and RAM memory consumption.
+- 👥 **User Administration:** Interactive controls to create, modify, extend expiration dates, manage multi-login limits, and remove SSH/VPN accounts.
+- 🌐 **Cloudflare & Domain Integration:** Quickly link subdomains and automatically update dynamic SSL certificates for TLS proxying.
+- ⚙️ **Service Status & Control:** Monitor system background daemons (Dropbear, Stunnel, WebSocket Proxy, BadVPN) directly from the interface.
+- 🎨 **Custom Banner Editor:** Native editing tool for SSH and Dropbear welcome messages (`/etc/issue.net`).
+
+---
+
+## 📋 Control Panel Interface
+
+```text
+───────────────────────────────────────────────────────────────
+ OS      : Ubuntu 22.04.4 LTS
+ UPTIME  : 12 days, 4 hours
+ IP PUB  : 192.0.2.1
+ DOMINIO : tu dominio.org.pe
+ ONLINE  : 3 usuario(s) activo(s)
+ DISCO   : Total 20G     Uso 4.2G     Libre 15G
+ CPU     : [||                ] 12.0%   Cores: 2
+ RAM     : [|||||             ] 420M/2048M   Libre: 1628M
+───────────────────────────────────────────────────────────────
+             PANEL DE CONTROL GOLBERT VPN
+───────────────────────────────────────────────────────────────
+ [1] Crear usuario SSH/VPN
+ [2] Editar usuario / Renovar vencimiento
+ [3] Eliminar usuario
+ [4] Ver usuarios activos en detalle
+ [5] Configurar Dominio / Hostname (Cloudflare)
+ [6] Cambiar / Configurar Banner
+ [7] Estado de los servicios
+ [0] Salir
+───────────────────────────────────────────────────────────────
+──────────────────────────────────────────────.
+
+---
+
+## ⚙️ System Requirements
+- **OS: Debian** 10/11/12 or Ubuntu 20.04/22.04/24.04 LTS
+ * Permissions: Root access (EUID 0)
+ * Dependencies: python3, curl, wget, net-tools, ufw, stunnel4, dropbear, cmake
+## 📄 License
+This project is open-source under the MIT License.
+
+
