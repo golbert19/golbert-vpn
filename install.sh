@@ -48,15 +48,15 @@ sed -i 's/NO_START=1/NO_START=0/' /etc/default/dropbear 2>/dev/null || true
 sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear 2>/dev/null || true
 sed -i 's/DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-p 109"/' /etc/default/dropbear 2>/dev/null || true
 
-# 4. Proxy Python WS Universal (Acepta GET / POST /PUT / HEAD / OPTIONS / PATCH / DELETE / CONNECT / PROPFIND / PROPPATCH / MKCOL / COPY /MOVE / LOCK / UNLOCK / UPDATE / etc)
-echo -e "${GREEN}[4/7] Creando Servicio HTTP/WS Proxy Universal...${NC}"
+# 4. Proxy Python WS Universal (Añadido puerto 8880 TCP BHTTP)
+echo -e "${GREEN}[4/7] Creando Servicio HTTP/WS Proxy Universal (Puertos 80, 8080, 8880 BHTTP)...${NC}"
 cat > /usr/local/bin/ws-proxy.py <<'PROXY_EOF'
 import socket
 import select
 import threading
 import time
 
-LISTENING_PORTS = [80, 8080]
+LISTENING_PORTS = [80, 8080, 8880]
 TARGET_HOST = '127.0.0.1'
 TARGET_PORT = 109
 BUFLEN = 8192
@@ -73,7 +73,6 @@ def handler(client_socket, address):
         target_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         target_socket.connect((TARGET_HOST, TARGET_PORT))
 
-        # Detecta cualquier solicitud HTTP (incluso errores tipográficos como PACTH)
         if b'HTTP/' in request or b'\r\n' in request:
             client_socket.sendall(RESPONSE_101)
         else:
@@ -171,8 +170,8 @@ Restart=always
 WantedBy=multi-user.target
 STUNNEL_SERVICE_EOF
 
-# 6. BadVPN
-echo -e "${GREEN}[6/7] Compilando e Instalando BadVPN UDPGW...${NC}"
+# 6. BadVPN UDPGW (Con soporte UDP HCR 8180 y 7300)
+echo -e "${GREEN}[6/7] Compilando e Instalando BadVPN UDPGW (Puertos 7300 y 8180 HCR)...${NC}"
 if wget -q -O /tmp/badvpn.tar.gz https://github.com/ambrop72/badvpn/archive/refs/tags/1.999.130.tar.gz; then
     cd /tmp && tar -xf badvpn.tar.gz && cd badvpn-1.999.130
     mkdir -p build && cd build
@@ -181,9 +180,10 @@ if wget -q -O /tmp/badvpn.tar.gz https://github.com/ambrop72/badvpn/archive/refs
     cd / && rm -rf /tmp/badvpn*
 fi
 
+# Instancia BADVPN 7300
 cat > /etc/systemd/system/badvpn.service <<'BADVPN_EOF'
 [Unit]
-Description=BadVPN UDPGW Service
+Description=BadVPN UDPGW Service (7300)
 After=network.target
 
 [Service]
@@ -193,6 +193,20 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 BADVPN_EOF
+
+# Instancia BADVPN HCR 8180
+cat > /etc/systemd/system/badvpn-hcr.service <<'BADVPN_HCR_EOF'
+[Unit]
+Description=BadVPN UDP HCR Service (8180)
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 0.0.0.0:8180 --max-clients 1000 --max-connections-for-client 10
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+BADVPN_HCR_EOF
 
 # 7. Limites, Limpieza y Menú Avanzado
 echo -e "${GREEN}[7/7] Configurando Limitador, Limpieza y Menú...${NC}"
@@ -373,9 +387,10 @@ while true; do
             echo -e " ${MAGENTA}PUERTOS DISPONIBLES EN EL SERVIDOR:${NC}"
             echo -e " ${CYAN}• SSL / TLS Proxy  :${NC} ${GREEN}443${NC}"
             echo -e " ${CYAN}• HTTP WS / Proxy  :${NC} ${GREEN}80, 8080${NC}"
+            echo -e " ${CYAN}• TCP BHTTP        :${NC} ${GREEN}8880${NC}"
+            echo -e " ${CYAN}• UDP HCR / UDPGW  :${NC} ${GREEN}8180, 7300${NC}"
             echo -e " ${CYAN}• Dropbear Directo :${NC} ${GREEN}109${NC}"
             echo -e " ${CYAN}• SSH Directo      :${NC} ${GREEN}22${NC}"
-            echo -e " ${CYAN}• BadVPN UDPGW     :${NC} ${GREEN}7300${NC}"
             echo -e "${GREEN}=====================================================${NC}"
             read -rp " Presione Enter para continuar..."
             ;;
@@ -469,7 +484,7 @@ while true; do
         7)
             echo ""
             echo -e "${CYAN}────────────── ESTADO DE SERVICIOS ──────────────${NC}"
-            systemctl status ws-proxy stunnel4 badvpn dropbear --no-pager
+            systemctl status ws-proxy stunnel4 badvpn badvpn-hcr dropbear --no-pager
             echo -e "${CYAN}──────────────────────────────────────────────────${NC}"
             read -rp " Presione Enter para continuar..."
             ;;
@@ -485,18 +500,14 @@ cp /usr/local/bin/menu /usr/local/sbin/menu 2>/dev/null || true
 
 systemctl daemon-reload >/dev/null 2>&1 || true
 systemctl restart dropbear >/dev/null 2>&1 || true
-systemctl enable --now ws-proxy stunnel4 badvpn golbert-limiter >/dev/null 2>&1 || true
+systemctl enable --now ws-proxy stunnel4 badvpn badvpn-hcr golbert-limiter >/dev/null 2>&1 || true
 
+# Configuración del Cortafuegos (UFW)
 ufw allow 22/tcp >/dev/null 2>&1 || true
 ufw allow 109/tcp >/dev/null 2>&1 || true
 ufw allow 443/tcp >/dev/null 2>&1 || true
 ufw allow 80/tcp >/dev/null 2>&1 || true
 ufw allow 8080/tcp >/dev/null 2>&1 || true
+ufw allow 8880/tcp >/dev/null 2>&1 || true # TCP BHTTP
 ufw allow 7300/udp >/dev/null 2>&1 || true
-echo "y" | ufw enable >/dev/null 2>&1 || true
-
-echo -e "${GREEN}=====================================================${NC}"
-echo -e "${GREEN}     ¡INSTALACIÓN COMPLETADA EXITOSAMENTE!           ${NC}"
-echo -e "${GREEN}=====================================================${NC}"
-
-/usr/local/bin/menu
+ufw allow 8180/udp >/dev/null 2>&1 || true # UDP H
