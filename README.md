@@ -26,7 +26,8 @@ Un script automatizado e interactivo para desplegar y administrar un servidor **
 Ejecuta el siguiente comando en tu terminal con acceso `root`:
 
 ```bash
-apt update -y && apt upgrade -y && wget https://raw.githubusercontent.com/golbert19/golbert-vpn/main/install.sh -O install.sh && bash install.sh
+apt update -y && apt upgrade -y && apt install -y wget && wget https://raw.githubusercontent.com/golbert19/golbert-vpn/main/install.sh && chmod +x install.sh && ./install.sh
+
 
 
 ```
